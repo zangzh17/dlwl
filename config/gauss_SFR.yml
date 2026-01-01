@@ -1,0 +1,46 @@
+name: '0223_gauss_sfr' 
+
+lp_file: 'lp1122-1-1225-168-100s.mat'
+gt_file: 'gt0217-1-119-115s.mat'
+
+device: 'cuda'
+method: 'SGD'
+optim_params:
+  num_iters: 8000
+  amsgrad: False
+  lr: 0.1
+  lr_s: 0.005
+
+loss_params:
+#   use_nonzero_mask: False
+#   use_zero_mask: False
+  channel_weight: [1.0]
+  eff_penalty_weight: 0.01
+  normalize: True
+
+
+prop_model: 'SFR'
+normalize_ratio: 1.0 # scaling of target amp.
+
+prop_dist: [50.0e-2]
+output_size: [10.0e-2,10.0e-2]
+
+wavelength: [650.0e-9, 520.0e-9, 450.0e-9]
+refraction_index: [1.62,1.63,1.64]
+
+pattern_type: 'pic'
+pattern_params:
+  # Directory for the dataset
+  data_path: './data'
+  target_filename: 'gauss.jpg'
+  rgb: False
+  binarize: False
+  reverse: False
+  contrast_factor: 1.5
+
+# SLM pitch in um
+feature_size: [2.0e-6, 2.0e-6]
+slm_res: [1000,1000] # DOE res.
+output_res: [1000,1000] # simulation output res. (must >= roi_res, use interp)
+target_res: [1000,1000] # Target resize res. 
+roi_res: [1000,1000] # roi res. of target/simulation when calc. loss

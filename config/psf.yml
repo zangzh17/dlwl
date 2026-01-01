@@ -1,0 +1,41 @@
+name: 'psf' 
+# Type of algorithm, GS/SGD/BS
+prop_model: 'ASM'
+
+prop_dist: [2.5]
+wavelength: [650]
+channel_weight: [1]
+
+pattern_type: 'pt'
+pattern_params:
+  data_path: './data'
+  target_filename: 'psf.pt'
+
+optim_params:
+  # Learning rate
+  lr: 0.05
+  lr_s: 0.0e-4
+  # Number of iterations (GS, SGD)
+  num_iters: 10000
+
+# loss_params:
+#   use_nonzero_mask: False
+#   use_zero_mask: False
+#   channel_weight: [1.0]
+#   penalty_weight: 0.0
+#   var_penalty_weight: 0.0
+
+# SLM pitch in um
+feature_size: [1, 1]
+slm_res: [950,950]
+input_res: [1200,1200] # simulation input res. (should>=slm_res, use padding)
+output_res: [150,150] # simulation output res. (must >= roi_res, use interp)
+target_res: [150,150] # Target resize res. (can < or > roi_res, corresponding to image pad/crop) 
+roi_res: [150,150] # roi res. of target/simulation when calc. loss
+
+normalize_ratio: 5 # scaling of target
+
+# plot params. for multi-batch targets
+plot_layout: [4,-1]
+
+

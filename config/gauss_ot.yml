@@ -1,0 +1,79 @@
+name: '0124_gauss' 
+# gt_path: 'C:\Users\zzh\MATLAB Drive\DLW-fab\gt_depth'
+# lp_path: 'C:\Users\zzh\MATLAB Drive\DLW-fab\lp_data'
+
+lp_file: 'lp1122-1-1225-168-100s.mat'
+gt_file: 'gt0314-1-95-110.mat'
+
+# min_dose: 70.0
+# max_dose: 140.0
+
+
+# method: 'GS'
+# num_iters: 500
+# input_power: 10.0e+2
+prop_model: 'ASM'
+normalize_ratio: 1.0 # scaling of target
+
+
+method: 'SGD'
+optim_params:
+  num_iters: 5000
+  amsgrad: False
+  # Learning rate
+  lr: 1.0
+  # eps: 1.0e-8
+  # lr_s: 0.0001
+loss_params:
+  square: False
+  normalize: True
+#   use_nonzero_mask: False
+#   use_zero_mask: False
+#   channel_weight: [1.0]
+#   penalty_weight: 0.0
+#   var_penalty_weight: 0.0
+
+
+
+# prop_dist: [50.0e-2]
+output_size: [10.0e-2,10.0e-2]
+wavelength: [650.0e-9]
+refraction_index: [1.62]
+# refraction_index: [1.29] # water
+
+pattern_type: 'pic'
+pattern_params:
+  # Directory for the dataset
+  data_path: './data'
+  target_filename: ['gauss.jpg']
+  rgb: False
+  binarize: False
+  reverse: False
+  contrast_factor: 1.3
+  scale_by_wavelength: False
+
+# fab_var:
+#   # fabrication variations (on gt curve)
+#   gamma: [1.0, 1.05, 0.95]
+#   amp: [1.0, 1.0, 1.0]
+# batch_weight: [1.0,0.5,0.5]
+
+# load checkpoints or not (~)/2D_sgd_0/1D_sgd_0
+# load_checkpoint_file: '2D_sgd_0'
+
+
+# SLM pitch in um
+feature_size_phase: [4.0e-6, 4.0e-6] # eff. pixel size: for 2-step optimization
+feature_size: [2.0e-6, 2.0e-6]
+slm_res: [2000,2000] # DOE res.
+output_res: [2000,2000] # simulation output res. (must >= roi_res, use interp)
+target_res: [1500,1500] # Target resize res. (can < or > roi_res, corresponding to image pad/crop) 
+roi_res: [1700,1700] # roi res. of target/simulation when calc. loss
+save_wrap_res: [2000,2000] 
+
+
+
+
+# use_nonzero_mask: True
+# use_zero_mask: False
+

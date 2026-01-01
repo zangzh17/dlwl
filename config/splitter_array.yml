@@ -1,0 +1,72 @@
+name: '0710_spl_array' 
+
+lp_file: 'lp0707-1225-5mm-1k2-150-240-2.mat'
+gt_file: 'gt0713-1225-5mm-230-180-1.mat'
+# min_dose: 70.0
+
+prop_model: 'FFT'
+prop_dist: [50.0e-2]
+channel_weight: [1.0]
+penalty_weight: 1.0
+normalize_ratio: 1.0
+
+pattern_type: 'splitter_array'
+feature_size: [0.5e-6, 0.5e-6]
+refraction_index: [1.6]
+
+# # 2D array
+# roi_res: [19,19] 
+# pattern_params:
+#   dim: 2
+#   N_group: 1 # repeat number
+#   wavelength_range: [1500.0e-9,1600.0e-9]
+#   # wavelength_range: [1550.0e-9,1550.0e-9]
+#   orders_start: [0,4,8,12]
+#   # number of splitter types
+#   N_pattern: 16
+#   orders_step: [[0, 0],[0, 1],[0, 2], [0, 3], [1, 0], [1, 1], [1, 2], [1, 3], [2, 0], [2, 1], [2, 2], [2, 3], [3, 0], [3, 1], [3, 2], [3, 3]]
+#   roi_order_num: 16
+#   tot_order_num: 96
+#   # save: False
+#   # load: True
+#   save: True
+#   load: False
+# save_wrap_res: [6000,2000]
+
+# 1D array
+roi_res: [17,1] 
+pattern_params:
+  dim: 1
+  # # for mirror
+  # N_group: 1 # repeat number
+  # wavelength_range: [1550.0e-9,1550.0e-9]
+  # for grating
+  N_group: 80 # repeat number
+  wavelength_range: [1500.0e-9,1600.0e-9]
+
+  orders_start: [0,4,8,12]
+  # number of splitter types
+  N_pattern: 4
+  orders_step: [[0, 0],[1, 0],[2, 0], [3, 0]]
+  roi_order_num: 16
+  tot_order_num: 64
+  save: False
+  load: True
+  # save: True
+  # load: False
+save_wrap_res: [16000,90]
+
+
+method: 'SGD'
+optim_params:
+  # lr: 0.2
+  # num_iters: 15000
+  lr: 0.1
+  num_iters: 4000
+
+# method: 'BS'
+# num_iters: 600
+
+
+plot_layout: [1,-1]
+

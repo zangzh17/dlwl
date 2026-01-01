@@ -1,0 +1,54 @@
+name: '1207_gauss-asm' 
+
+lp_file: 'lp1122-1-1225-168-100s.mat'
+gt_file: 'gt1122-2-1225-170-110s.mat'
+
+
+method: 'SGD'
+optim_params:
+  optimizer: 'adam'
+  num_iters: 10000
+  amsgrad: False
+  lr: 0.3
+  lr_s: 0.001
+
+  
+# loss_params:
+#   use_nonzero_mask: False
+#   use_zero_mask: False
+#   channel_weight: [1.0]
+#   penalty_weight: 0.0
+#   var_penalty_weight: 0.0
+
+prop_model: 'ASM'
+normalize_ratio: 1.0 # scaling of target amp.
+
+prop_dist: [10.0e-2]
+
+wavelength: [650.0e-9]
+refraction_index: [1.62]
+
+pattern_type: 'pic'
+pattern_params:
+  # Directory for the dataset
+  data_path: './data'
+  target_filename: 'gauss.jpg'
+  rgb: False
+  binarize: False
+  reverse: False
+  contrast_factor: 1.5
+
+
+# random_fluc: [0,0.1e-6, 0.1e-6]
+# random_bias: [0,0.1e-6,-0.1e-6]
+
+# SLM pitch in um
+feature_size: [2.0e-6, 2.0e-6]
+save_pixel_multiply: 4 # reduce output feature size by pixel multiplying
+slm_res: [2000,2000] # DOE res.
+output_res: [2000,2000] # simulation output res. (must >= roi_res, use interp)
+target_res: [1800,1800] # Target resize res. 
+roi_res: [2000,2000] # roi res. of target/simulation when calc. loss
+
+
+

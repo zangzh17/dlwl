@@ -1,0 +1,75 @@
+# name: '0412_1_dot_0inc62d' 
+name: '0426_2d15_130d_650_e2e' 
+
+lp_file: 'lp0418-2-130-110s.mat'
+gt_file: 'gt0423-1-126-110s.mat'
+
+input_power: 0.0
+# prop_dist: [20.0e-2]
+# output_size: [17.8e-2, 17.8e-2]
+
+pattern_type: 'dot_projector'
+pattern_params:
+  dim: 2
+  num_y: 15 
+  num_x: 15 # if use 2D
+  fwhm: null
+  distort_corr: False
+  margin: 1 # in unit of pixels
+
+# SLM pitch in um 
+# Large
+feature_size: [0.5e-6, 0.5e-6]
+slm_res: [2000,2000] # DOE res.
+save_wrap_res: [4000,4000] 
+save_pixel_multiply: 1
+output_res: [2000,2000] # simulation output res. (must >= roi_res, use interp)
+target_res: [1400,1400] # Target resize res. (can < or > roi_res, corresponding to image pad/crop) 
+roi_res: [1750,1750] # roi res. of target/simulation when calc. loss
+
+# SLM pitch in um
+# Small
+# feature_size: [0.5e-6, 0.5e-6]
+# slm_res: [2000,2000] # DOE res.
+# save_wrap_res: [4000,4000] 
+# save_pixel_multiply: 1
+# output_res: [2000,2000] # simulation output res. (must >= roi_res, use interp)
+# target_res: [1200,1200] # Target resize res. (can < or > roi_res, corresponding to image pad/crop) 
+# roi_res: [1550,1550] # roi res. of target/simulation when calc. loss
+
+
+
+prop_model: 'FFT'
+
+device: 'cuda'
+method: 'SGD'
+optim_params:
+  lr: 0.18
+  lr_s: 0.0001
+  num_iters: 25000
+
+# method: 'BS'
+# optim_params:
+#   num_iters: 600
+
+loss_params:
+#   use_nonzero_mask: False
+#   use_zero_mask: False
+  channel_weight: [1.0]
+  eff_penalty_weight: 0.0
+  var_penalty_weight: 0.0
+  square: True
+  normalize: True
+
+# for propagation model
+normalize: False
+
+normalize_ratio: 1.0
+
+
+# wavelength: [1550.0e-9]
+# refraction_index: [1.6]
+wavelength: [650.0e-9]
+refraction_index: [1.62]
+
+plot_layout: [1,-1]

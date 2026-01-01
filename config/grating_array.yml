@@ -1,0 +1,62 @@
+name: '0708_grating_array' 
+
+lp_file: 'lp0712-1225-5mm-170-50-1.mat'
+gt_file: 'gt0713-1225-5mm-230-180-1.mat'
+
+prop_model: 'FFT'
+
+prop_dist: [50.0e-2]
+channel_weight: [1.0]
+penalty_weight: 5.0
+normalize_ratio: 10.0
+
+feature_size: [0.5e-6, 0.5e-6]
+pattern_type: 'grating_array'
+
+# pattern_params:
+#   N_group: 29
+#   wavelength_range: [1500.0e-9,1600.0e-9]
+#   period_range: [6.0e-6,7.0e-6, 9.0e-6, 6.0e-6, 14.0e-6]
+#   orders_range: [2,     2,      2,      1,      1]
+#   roi_length:   [5,     5,      7,      5,      11]
+#   load: True
+#   save: False
+# refraction_index: [1.6]
+# save_wrap_res: [16000,90]
+# lr: 0.1
+# num_iters: 3000
+
+pattern_params:
+  N_group: 1
+  wavelength_range: [1550.0e-9,1550.0e-9]
+  period_range: [6.0e-6,7.0e-6, 9.0e-6, 6.0e-6, 14.0e-6]
+  orders_range: [2,     2,      2,      1,      1]
+  roi_length:   [5,     5,      7,      5,      11]
+  load: True
+  save: False
+refraction_index: [1.6]
+save_wrap_res: [16000,90]
+
+optim_params:
+  lr: 0.1
+  num_iters: 3000
+
+# pattern_params:
+#   N_group: 1
+#   wavelength_range: [1550.0e-9,1550.0e-9]
+#   period_range: [6.0e-6,7.0e-6, 9.0e-6, 6.0e-6, 14.0e-6]
+#   orders_range: [2,     2,      2,      1,      1]
+#   roi_length:   [5,     5,      7,      5,      11]
+#   load: False
+#   save: True
+# refraction_index: [1.6]
+# save_wrap_res: [16000,90]
+# lr: 0.15
+# num_iters: 15000
+
+# use_zero_mask: True
+
+
+plot_layout: [1,-1]
+
+

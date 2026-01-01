@@ -1,0 +1,93 @@
+name: '0423_1d5_650_2step' 
+
+lp_file: 'lp0418-2-130-110s.mat'
+gt_file: 'gt0423-1-126-110s.mat'
+
+roi_res: [6,1] # ROI whose inside considers loss
+slm_res: [6,1]
+pattern_params:
+  dim: 1
+  orders: [0,1,2,3,4]
+  order_shift: [0,0] # for 1D, use [shift_value,0]
+  roi_order_num: 5 # ROI which encircles operating orders
+  tot_order_num: 6 # total pixels in width/height
+  save: True
+  load: False
+  # save: False
+  # load: True
+
+# roi_res: [4,1] # ROI whose inside considers loss
+# slm_res: [4,1]
+# pattern_params:
+#   dim: 1
+#   orders: [0,1,2]
+#   order_shift: [0,0] # for 1D, use [shift_value,0]
+#   roi_order_num: 3 # ROI which encircles operating orders
+#   tot_order_num: 4 # total pixels in width/height
+#   save: True
+#   load: False
+#   # save: False
+#   # load: True
+
+save_wrap_res: [1500,1500]
+
+prop_model: 'FFT'
+
+device: 'cpu'
+
+# method_phase: 'SGD'
+# optim_params_phase:
+#   lr: 0.5e-8
+#   # lr_s: 1.0e-4
+
+#   num_iters: 10000
+# method_phase: 'BS'
+# optim_params_phase:
+#   lr: 0.1e-8
+#   lr_s: 1.0e-4
+#   num_iters: 10000
+method_phase: 'BS'
+optim_params_phase:
+  num_iters: 350
+# method_phase: 'GS'
+# optim_params_phase:
+#   num_iters_phase: 800
+loss_params_phase:
+#   use_nonzero_mask: False
+#   use_zero_mask: False
+  channel_weight: [1.0]
+  eff_penalty_weight: 0.0
+  square: True
+  normalize: True
+#   var_penalty_weight: 0.0
+
+method: 'BS'
+optim_params:
+  num_iters: 350
+# optim_params:
+#   optimizer: 'adam'
+#   num_iters: 25000
+#   eps: 1.0e-8
+#   amsgrad: True
+#   lr: 2.0e+2
+#   lr_s: 0.0  
+loss_params:
+  square: False
+  normalize: False
+  custom: 'L1'  
+
+
+
+
+pattern_type: 'splitter'
+# wavelength: [1550.0e-9]
+# refraction_index: [1.6]
+wavelength: [650.0e-9]
+refraction_index: [1.62]
+feature_size: [0.5e-6, 0.5e-6]
+# feature_size_phase: [3.0e-6, 0.5e-6]
+feature_size_phase: [2.0e-6, 0.5e-6]
+
+
+plot_layout: [1,-1]
+
