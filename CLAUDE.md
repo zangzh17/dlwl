@@ -1,426 +1,239 @@
+# DOE Optimizer v3.0
 
-# DOE优化器重构指导文档
+A Python backend for designing and optimizing Diffractive Optical Elements (DOEs) with a web-based testing interface.
 
-## 一、项目概述
+## Project Overview
 
-### 1.1 项目目标
+**Goal**: Optimize DOE phase distributions to produce target optical patterns via light propagation simulation.
 
-本项目是一个DOE（衍射光学元件）设计与优化的Python后端，为交互式用户App提供计算服务。核心功能是通过光学传播模型和可选的激光直写(DLWL)工艺模型，优化DOE的相位分布，使其产生的光学效果尽可能接近用户指定的目标图案。
+**Two-Step Method**:
+1. **Phase Optimization**: Optimize DOE height/phase using propagation models (FFT/ASM/SFR)
+2. **Fabrication Optimization** (optional): Optimize laser writing parameters to match target morphology
 
-### 1.2 优化策略：两步法
-
-项目采用"两步法"作为主要优化策略：
-
-**第一步 - DOE形貌优化**：给定目标光强图案，通过光学传播模型优化DOE的高度/相位分布。输出供用户下载的DOE设计文件及光学仿真评估结果。
-
-**第二步 - 工艺优化（可选）**：将第一步得到的目标形貌作为输入，通过工艺模型优化加工参数(Dose分布)，使加工后的实际形貌接近设计形貌。输出工艺+光学联合仿真的评估结果。
-
----
-
-## 二、代码结构
-
-### 2.1 原始代码（根目录）
+## Directory Structure
 
 ```
 dlwl/
-├── algorithms.py          # 原始优化算法（GS, SGD, BS）
-├── physical_model.py      # 原始物理模型（传播+工艺）
-├── main_train.py          # 原始训练入口
-├── main_train_2step.py    # 两步法训练入口
-├── test_splitter.py       # 分束器测试脚本
-├── test_custom_pattern.py # 自定义图案测试脚本
-├── utils/                 # 原始工具函数
-│   ├── utils.py           # 通用工具
-│   ├── gen_pattern.py     # 图案生成
-│   └── ...
-└── torchpwl/              # 分段线性拟合库
+├── doe_optimizer/          # Core library
+│   ├── api/                # JSON request/response schemas
+│   ├── params/             # Structured parameters (FFT/SFR/ASM)
+│   ├── wizard/             # Parameter generators (Splitter/Diffuser/Lens)
+│   ├── validation/         # Parameter validation
+│   ├── core/               # Propagation, loss functions, optimizer
+│   ├── pipeline/           # OptimizationRunner, progress reporting
+│   ├── evaluation/         # Result evaluation, metrics
+│   ├── visualization/      # Plotly data export
+│   └── utils/              # FFT, image, math utilities
+├── web_frontend/           # Web interface (v3.0)
+│   ├── backend/            # FastAPI backend
+│   │   ├── app.py          # Main application
+│   │   ├── routes/         # API endpoints
+│   │   └── services/       # Task manager, preview service
+│   └── frontend/           # HTML/CSS/JS frontend
+│       ├── index.html      # Single-page application
+│       ├── css/            # Styles
+│       └── js/             # JavaScript modules
+├── test_splitter_v2.py     # Test scripts
+├── test_splitter_validation.py   # Test scripts
+├── results/                # Test results
+├── docs/                   # Documentation
+├── data/                   # Input images, calibration data
+└── archive_v1/             # Legacy code (reference only)
 ```
 
-### 2.2 重构后代码（doe_optimizer/）
+## Web Frontend (v3.0)
 
-```
-doe_optimizer/
-├── __init__.py            # 包导出，提供统一API
-├── core/
-│   ├── config.py          # 统一配置类（dataclass）
-│   │                      # - DOEType, PropModel, SplitterMode 枚举
-│   │                      # - PhysicalParams, DeviceParams 参数类
-│   │                      # - OptimizationParams, TargetParams 参数类
-│   │                      # - DOEConfig 主配置类（含参数校验和派生值计算）
-│   ├── propagation.py     # 光学传播（ASM/FFT/SFR）
-│   ├── fabrication.py     # 工艺模型（GT/LP曲线）
-│   └── optimizer.py       # 优化器基类及实现（SGD/GS/BS）
-├── patterns/
-│   ├── base.py            # PatternGenerator基类
-│   ├── splitter.py        # 分束器（1D/2D）- 已完整实现
-│   ├── spot_projector.py  # 点阵投影器
-│   ├── diffuser.py        # 匀光片
-│   ├── lens.py            # 透镜/透镜阵列
-│   ├── deflector.py       # 偏转器
-│   ├── custom.py          # 自定义图案
-│   └── factory.py         # 工厂函数 generate_target_pattern()
-├── pipeline/
-│   ├── two_step.py        # 两步法流程 optimize_doe()
-│   │                      # - DOEResult 结果数据类
-│   │                      # - 相位优化、工艺优化流程
-│   └── evaluation.py      # 评估函数
-│                          # - EvaluationMetrics 指标类
-│                          # - evaluate_result() 通用评估
-│                          # - evaluate_finite_distance_splitter() 有限远评估
-│                          # - FiniteDistanceEvaluation 结果类
-└── utils/
-    ├── fft_utils.py       # FFT工具（ZoomFFT2）
-    ├── math_utils.py      # 数学工具（height2phase, spherical_phase等）
-    ├── image_utils.py     # 图像处理（crop, pad, upsample, tile等）
-    └── visualization.py   # 可视化（plot_splitter_result等）
+Start the web interface:
+```bash
+uv run uvicorn web_frontend.backend.app:app --reload
 ```
 
-### 2.3 当前实现状态
+Open http://localhost:8000 in your browser to access:
+- **Wizard**: Configure DOE parameters interactively
+- **Preview**: Visualize geometry and target patterns
+- **Optimize**: Run optimization with real-time progress
+- **Results**: View results with Plotly charts and export
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| 配置系统 (config.py) | ✅ 完成 | 支持所有DOE类型的参数定义和校验 |
-| 传播模型 (propagation.py) | ✅ 完成 | ASM/FFT/SFR三种算法 |
-| 优化器 (optimizer.py) | ✅ 完成 | SGD/GS/BS三种算法 |
-| 分束器 (splitter.py) | ✅ 完成 | 1D/2D，Natural/Uniform网格，偶数对称处理 |
-| 有限远策略 | ✅ 完成 | Strategy 1 (ASM) 和 Strategy 2 (Periodic+Fresnel) |
-| 评估函数 (evaluation.py) | ✅ 完成 | 衍射效率、均匀度、聚焦效率等 |
-| 可视化 (visualization.py) | ✅ 完成 | 各种结果可视化函数 |
-| 匀光片 (diffuser.py) | 🔧 部分 | 基本框架完成 |
-| 透镜 (lens.py) | 🔧 部分 | 基本框架完成 |
-| 偏转器 (deflector.py) | 🔧 部分 | 基本框架完成 |
-| 自定义图案 (custom.py) | 🔧 部分 | 基本框架完成 |
-| 工艺优化 (fabrication.py) | 🔧 部分 | GT/LP模型已实现，需要校准数据 |
+### API Endpoints
+- `POST /api/wizard` - Generate structured params from wizard input
+- `POST /api/validate` - Validate parameters
+- `POST /api/preview` - Generate preview (geometry SVG + target plots)
+- `POST /api/optimize` - Start optimization (returns task_id)
+- `GET /api/status/{id}` - Query progress
+- `POST /api/cancel/{id}` - Cancel optimization
+- `GET /api/result/{id}` - Get results
+- `WebSocket /api/ws/optimize/{id}` - Real-time progress streaming
 
+### Reference Values (Read-only)
+The frontend displays computed reference values to help users understand the optical limits:
+- **Period**: Physical size of one period (um)
+- **DOE Pixel**: Physical fabrication pixel size (um)
+- **Max Angle**: Maximum diffraction angle = arcsin(λ / 2×pixel_effective), where pixel_effective = pixel_size × pixel_multiplier
+- **Diff. Limit**: Angular resolution = λ/D (deg)
+- **Min Tolerance**: Minimum tolerance when period = device diameter
+- **Max Mult.**: Maximum pixel_multiplier before pattern exceeds diffraction limit
 
----
+## Quick Start (Python API)
 
-## 三、核心技术概念
+```python
+from doe_optimizer import run_optimization
 
-### 3.1 三种光学传播算法
+# Define DOE parameters
+user_input = {
+    'doe_type': 'splitter_2d',
+    'wavelength': 532e-9,
+    'device_diameter': 256e-6,
+    'pixel_size': 1e-6,
+    'target_spec': {
+        'num_spots': [5, 5],
+        'target_type': 'angle',
+        'target_span': [0.1, 0.1],
+        'grid_mode': 'natural'
+    }
+}
 
-根据工作距离和目标面尺寸，选用不同的传播算法：
+# Run optimization
+response = run_optimization(user_input)
 
-| 传播算法 | 适用场景 | 输出特性 |
-|---------|---------|---------|
-| **FFT** | 无穷远 / 角度空间 | 直接计算角谱，映射到角度空间 |
-| **ASM** | 有限近距离，目标面≈DOE尺寸 | 输出面与输入面大小相同 |
-| **SFR** | 有限远距离，目标面可调 | 输出面大小可通过zoom-FFT调整 |
+if response.success:
+    result = response.result
+    print(f"Efficiency: {result.metrics['total_efficiency']:.4f}")
+```
 
-### 3.2 周期化与k空间采样
+## Propagation Types
 
-对于无穷远工作或采用周期化策略的DOE：
-- 整个器件视为基本周期的延拓
-- 周期大小决定k空间（角度空间）的采样网格
-- 较小周期 → 稀疏k空间采样 → 更快优化但角度精度受限
-- 较大周期 → 密集k空间采样 → 更高角度精度但计算量增加
+| Type | Use Case | Output | Periodic |
+|------|----------|--------|----------|
+| **FFT** | Infinite distance / k-space | Angular spectrum | Yes |
+| **ASM** | Near-field, target ~ DOE size | Same physical size | No |
+| **SFR** | Far-field, large target area | Adjustable output size | No |
+| **Periodic+Fresnel** | Strategy 2: finite distance with periodic DOE | Physical coordinates | Yes |
 
-### 3.3 tolerance参数
+## DOE Types
 
-tolerance参数衡量用户可接受的角度误差（百分比），用于在周期大小和角度精度之间权衡：
-- 较大tolerance → 允许较小周期，优化更快
-- 较小tolerance → 需要较大周期，角度更精确
+- **Splitter (1D/2D)**: Beam splitting into spot arrays
+- **Diffuser**: Uniform illumination patterns
+- **Lens/Lens Array**: Focusing elements
+- **Custom**: User-defined target patterns
 
-适用于无穷远DOE，或采用"周期+Fresnel叠加"策略的有限远DOE。
+## Key APIs
 
-### 3.4 像素尺寸与上采样
+### OptimizationRunner
+```python
+from doe_optimizer import OptimizationRunner, OptimizationRequest
 
-- **全局pixel size**：由加工设备决定的固定像素尺寸
-- **"大pixel"策略**：DOE优化时可使用全局pixel size的整数倍，减少计算量
-- **上采样因子**：仿真时将相位上采样以提高精度，受最大仿真像素数限制
-- **采样定理约束**：根据最大衍射角计算允许的最大像素尺寸
+runner = OptimizationRunner(max_resolution=2000)
+request = OptimizationRequest.from_json(user_input)
+response = runner.run(request, progress_callback=on_progress)
+```
 
-### 3.5 有限远DOE的两种策略
+### Progress Callback
+```python
+from doe_optimizer import ProgressInfo, CancellationToken
 
-**策略1 - 直接ASM**：当目标尺寸与DOE尺寸相近且像素规模在限制内时，直接用ASM传播优化，无需周期化。
+cancel_token = CancellationToken()
 
-**策略2 - 周期+Fresnel叠加**：目标尺寸较大时，按无穷远情况设计周期化DOE，优化后在全器件上叠加聚焦Fresnel相位实现有限远工作。
+def on_progress(info: ProgressInfo):
+    print(f"[{info.stage}] {info.progress:.1%}, Loss: {info.current_loss:.2e}")
+    if should_cancel:
+        cancel_token.cancel()
+```
 
----
+### Loss Functions
+```python
+from doe_optimizer import create_loss
 
-## 四、第二次重构目标：分层架构
+loss_fn = create_loss('L2')  # or 'L1', 'focal_efficiency'
+```
 
-当前代码按DOE种类组织参数，不符合软件分层设计理念。需要重构为以下层次：
+## Splitter-Specific Concepts
 
-### 4.1 架构层次
+### Grid Modes
+- **Natural**: k-space uniform, follows diffraction orders
+- **Uniform**: Angle-space uniform, requires tolerance parameter
 
-- 参数生成器（Wizard）
-    - 根据DOE类型和用户参数生成结构化参数
-    - 可跳过，用户也可直接定义结构化参数
-- 参数校验层
-    - 检查结构化参数是否符合物理和计算限制
-- 优化层
-    - 输入：传播算子、优化参数、目标图案
-    - 执行实际优化计算
-- 分析层
-    - 接收优化结果，执行评估和分析
-    - 为前端可视化提供数据
-- 可视化层
-    - Python端：本地调试用
-    - 数据导出：供前端Plotly渲染
+### Finite Distance Strategies
+- **Strategy 1 (ASM/SFR)**: Direct propagation when target ~ DOE size
+- **Strategy 2 (Periodic+Fresnel)**: Periodic DOE + Fresnel lens overlay
 
+### Key Parameters
+- `tolerance`: Angular error tolerance (%) for uniform grid
+- `pixel_size`: Fabrication pixel size (determines max diffraction angle: θ_max = arcsin(λ/2p))
+- `pixel_multiplier`: Groups DOE pixels, effectively increasing pixel size (reduces max angle)
+- `period_pixels`: Optimization unit size - one period of the periodic pattern
+- `doe_pixels`: Full device size in pixels
+- `num_periods`: Derived value = doe_pixels / period_pixels (how many periods tile the device)
+- `simulation_upsample`: Resolution multiplier during optimization
+- `analysis_upsample`: Resolution multiplier for post-optimization evaluation
 
-### 4.2 DOE结构化参数（按传播类型分类）
+## Testing
 
-重构后的结构化参数不再按DOE种类组织，而是按传播算法类型统一定义：
+Run comprehensive tests:
+```
+uv run test_splitter_v2.py
+uv run test_splitter_validation.py
+```
 
-#### 类型A：k空间/无穷远（FFT传播）
+Test cases cover:
+- FFT 1D/2D with natural/uniform grids
+- ASM/SFR finite distance evaluation
+- Strategy 2 (Periodic+Fresnel) splitters
+- Upsampling during optimization and evaluation
+- parameter validation
 
-| 参数 | 说明 |
-|-----|------|
-| 周期像素规模 | 作为仿真单元 |
-| DOE总像素数 | 评估时使用 |
-| 波长、像素尺寸 | 物理参数 |
-| 上采样因子 | 受最大仿真像素数限制 |
-| 目标图案 | 维度需匹配仿真器输出 |
+## Key Implementation Notes
 
-#### 类型B：大目标面有限远（SFR传播）
+### Efficiency Calculation
+- FFT k-space: Use `integration_radius=0` (point-like orders)
+- Physical (ASM/SFR): Use Airy disk integration
 
-| 参数 | 说明 |
-|-----|------|
-| DOE总像素数 | - |
-| 传播距离、波长、像素尺寸 | 物理参数，支持多值（多目标优化） |
-| 上采样因子 | 需满足最大衍射角采样限制 |
-| 目标面尺寸和采样像素数 | - |
-| 目标图案 | 可为三维[1,C,H,W]支持多目标优化 |
+### Upsampling Normalization
+- 1D arrays: Normalize by `upsample_factor^2`
+- 2D arrays: Normalize by `upsample_factor^4`
 
-#### 类型C：小目标面有限远（ASM传播）
+### Energy Conservation
+- FFT output energy scales as `(N*M)^2` for N×M input
+- Cropped output requires energy renormalization for fair comparison
 
-| 参数 | 说明 |
-|-----|------|
-| DOE总像素数 | - |
-| 传播距离、波长、像素尺寸 | 物理参数，支持多值（多目标优化） |
-| 上采样因子 | - |
-| 目标面像素数 | 通过补零实现，受最大像素数限制 |
-| 目标图案 | 可为三维[1,C,H,W]支持多目标优化 |
+## Documentation
 
-### 4.3 优化参数（统一定义）
+See `docs/` for detailed information:
+- `SFR_theory.md`: Scalable Fourier Representation theory
+- `python_service.md`: Service API documentation
+- `changelog.md`: Version history
 
-| 参数 | 说明 |
-|-----|------|
-| ROI开关及mask | 是否仅计算ROI区域的loss |
-| 学习率 lr | 相位优化学习率 |
-| 全局能量学习率 ls | 适合不关心全局效率的情况 |
-| loss类型 | MSE(L2)、L1、聚焦效率、聚焦效率std |
-| loss权重 | 多loss时的权重配置 |
-| 优化方法 | SGD(Adam)或Binary Search(小规模时可用) |
-| 迭代次数 | - |
+## Dependencies
 
----
+- Use uv for environment management: `uv sync`
+- Core: torch, numpy, scipy, plotly
+- Web: fastapi, uvicorn, websockets
 
-## 五、支持的DOE类型及参数生成器
+## Troubleshooting
 
-参数生成器作为Wizard，帮助用户从高层参数生成结构化参数。
+### CUDA Error: unknown error (recurring issue)
 
-### 5.1 公共参数（所有DOE类型）
+This error occurs when CUDA gets into a bad state. **Not a code bug** - it's a CUDA driver/state issue.
 
-- 工作距离（可为无穷远）
-- 工作波长
-- DOE类型
-- 器件直径
-- 器件形状（circular/square）
+**Solution:**
+```bash
+# 1. Kill all Python processes
+taskkill /F /IM python.exe
 
-### 5.2 工艺优化参数（可选）
+# 2. Check GPU status (helps reset CUDA)
+nvidia-smi
 
-- 是否启用工艺优化
-- 工艺配方选择
+# 3. Restart server (must use GPU, not CPU-only)
+uv run uvicorn web_frontend.backend.app:app --reload
+```
 
-### 5.3 各DOE类型的特定参数
+**DO NOT** use `CUDA_VISIBLE_DEVICES=` to disable GPU - optimization requires GPU.
 
-#### 2D Spot Projector / 1D Splitter
-
-- 点阵规模（行列数 / 分束数目）
-- 目标规格类型：角度(无穷远) 或 尺寸(有限远)
-- 目标尺寸/角度span
-- 网格模式：
-  - **自然网格**：k空间均匀，对应自然衍射级次
-  - **强制均匀网格**：角度/位置空间均匀，需要tolerance参数
-- 有限远策略选择（当适用时）
-
-#### Diffuser（匀光片）
-
-- 扩散形状：方形或圆形
-- 目标规格类型及尺寸（同上）
-
-#### Lens / Lens Array（衍射透镜/阵列）
-
-- 焦距
-- 透镜类型：普通或柱面(X/Y方向)
-- 阵列规模（仅Lens Array）
-- 特殊功能：多焦面（扩展焦深）、多波长（扩展带宽）
-
-#### Deflector / Prism（偏转器/棱镜）
-
-- 偏转角度（二维）
-- 本质是只有一个工作级次的splitter
-
-#### Custom Pattern（自定义图案）
-
-- 用户上传的图片
-- resize后的目标分辨率
-- 目标规格类型及尺寸
-- tolerance参数（用于估计可实现的等效像素数）
+The codebase has built-in CUDA error recovery:
+- `wizard/base.py`: `_get_device()` tests CUDA before use
+- `routes/wizard.py`: `_generate_params_with_cuda_recovery()` falls back gracefully
 
 ---
 
-## 六、关键实现要点
-
-### 6.1 Splitter的周期计算
-
-**自然网格模式**：搜索最小周期Λ_min，使k空间网格在目标角度范围内恰好包含指定数目的衍射级次。
-
-**强制均匀网格模式**：根据tolerance计算所需的最小周期，使k空间足够密集，snap后的角度误差在容许范围内。
-
-**偶数分束对称性处理**：偶数级次会导致非对称图案，解决方法是将周期加倍，在加密的k空间中间隔选择级次以保持对称。
-
-### 6.2 有限远评估
-
-- **策略2情况**：先按无穷远计算衍射效率，再用SFR仿真目标面光强，在每个理论焦点位置取Airy半径圆形区域计算实际效率
-- **策略1情况**：直接在ASM仿真结果上，按Airy半径区域计算各焦点效率
-
-### 6.3 可视化输出
-
-- 单周期相位分布
-- 整器件相位分布
-- 各工作级次衍射效率stem图（含理论参考线和统计量）
-- 角度/位置分布散点图（颜色表示效率）
-
-### 6.4 全局限制
-
-需要设置全局最大仿真像素数（如2000×2000），作为优化和仿真的计算量上限。
-
-### 6.5 聚焦效率的定义与计算
-
-聚焦效率是评估有限远工作衍射透镜、衍射透镜阵列、有限远分束器等DOE性能的核心指标，描述入射光能量被有效聚焦到目标位置的比例。
-
-#### 计算方法
-
-对于每个目标焦点（光斑）：
-1. 确定焦点的理论位置（角度或空间坐标）
-2. 以该位置为圆心，取一个圆形积分区域
-3. 计算圆形区域内的光强积分占总入射能量的比例
-
-**单点聚焦效率**：
-$$\eta_i = \frac{\int_{r < R} I(x,y) \, dA}{P_{in}}$$
-
-其中 $R$ 为积分半径，$P_{in}$ 为入射总功率。
-
-#### 积分半径的选择
-
-积分半径通常取**Airy斑半径**，由DOE的全孔径决定（对于透镜阵列则为子孔径）：
-
-$$R_{Airy} = 1.22 \frac{\lambda \cdot z}{D}$$
-
-- $\lambda$：工作波长
-- $z$：工作距离（有限远情况）
-- $D$：DOE有效孔径直径
-
-#### 作为Loss函数
-
-聚焦效率可直接用作优化的loss函数：
-
-| Loss类型 | 计算方式 | 适用场景 |
-|---------|---------|---------|
-| 聚焦效率均值 | $-\frac{1}{N}\sum_i \eta_i$ | 最大化平均效率 |
-| 聚焦效率std | $\text{std}(\{\eta_i\})$ | 最小化效率不均匀性 |
-| 组合 | 加权组合上述两项 | 同时优化效率和均匀度 |
-
-#### 评估时的应用
-
-在优化完成后的评估阶段，聚焦效率用于量化DOE性能：
-
-- **总效率**：所有工作级次效率之和，反映能量利用率
-- **均匀度**：$1 - \frac{\max(\eta) - \min(\eta)}{\max(\eta) + \min(\eta)}$，反映各点一致性
-- **理论对比**：与理想均匀分束的理论效率（$1/N$每点）对比
-
-#### 有限远情况的特殊处理
-
-对于采用"周期+Fresnel叠加"策略的有限远DOE：
-1. 先在k空间（无穷远）计算各衍射级次效率
-2. 再用SFR传播仿真实际目标面光强分布
-3. 在仿真结果上按Airy半径重新计算各焦点效率
-4. 两种效率可能略有差异，后者更接近实际情况
-
-
-### 6.6 架构层次划分问题
-
-1. **Wizard层 vs Config层的边界**
-- Wizard只做参数转换，物理约束计算在后一层做；这样用户直接构造DOEConfig时，跳过Wizard仍可以保证参数有效
-
-2. **参数校验的时机**
-- 实时校验（每次修改参数）
-- 校验失败时返回错误信息
-
-3. **优化层与传播算子的关系**
-- 传播算子应该在Config中创建而不是在Optimizer中创建
-
-### 6.7 API设计问题
-
-**前端交互相关：**
-
-1. **输入格式**
-- 用户参数最后会由前端提供，可能是JSON等格式
-- 图像类型参数（target_image）序列化方式待定
-
-2. **输出格式**
-- 某中间结果需要返回（如单周期相位）
-
-3. **进度反馈**
-- progress_callback 每N次迭代
-- 需要返回预估剩余时间
-- 需要支持取消优化
-
-### 6.8 物理参数相关问题
-
-**多目标优化或多焦面优化**
-
-- 目标图案暂时不需要为每个波长或工作距离单独指定，暂时共用
-- 传播时，用[1，C, H, W]维度，损失函数直接多目标结果求和（用broadcasting）
-
-### 6.8 建议的第二次重构步骤
-
-#### Phase 1: 接口标准化
-
-1. 定义前端与后端的JSON接口规范（输入/输出/错误格式）
-2. 将DOEConfig拆分为用户输入参数（UserParams）和派生参数（ComputedParams）
-3. 创建Wizard类，封装各DOE类型的参数生成逻辑
-4. 添加参数校验层，返回结构化的错误/警告信息
-
-#### Phase 2: 优化流程解耦
-
-1. 将传播算子的创建从Optimizer移出
-2. 统一Loss函数接口，支持插件式扩展
-3. 实现进度回调的标准化接口
-
-#### Phase 3: 评估与可视化
-
-1. 将评估逻辑从pipeline移到独立的Evaluator类
-2. 定义前端可视化所需的数据结构（VisualizationData）
-3. 实现可视化数据的按需生成（避免一次性计算所有可视化）
-
----
-
-## 七、现有代码中的关键实现参考
-
-### 7.1 分束器周期计算 (config.py:get_splitter_period)
-
-关键逻辑：
-- Natural模式：根据目标角度和点数计算最小周期
-- Uniform模式：根据tolerance计算所需的k空间密度
-- 偶数点数：周期加倍以实现对称选择
-- 有限远Strategy 1：周期=器件直径（非周期化）
-
-### 7.2 有限远评估 (evaluation.py:evaluate_finite_distance_splitter)
-
-关键逻辑：
-- Strategy 1 (ASM)：直接ASM传播，在物理位置积分计算效率
-- Strategy 2 (Periodic+Fresnel)：使用k空间FFT评估衍射级次效率
-
-### 7.3 两步法流程 (two_step.py:optimize_doe)
-
-关键逻辑：
-1. 生成目标图案（根据DOE类型调用对应Generator）
-2. 创建优化器（根据传播模型选择参数）
-3. 执行相位优化
-4. （可选）执行工艺优化
-5. 生成完整结果（包括器件相位、Fresnel叠加等）
+*v3.1 - Added Strategy 2 (Periodic+Fresnel) propagation, improved UI with Reference Values*
+*v3.0 - Added web frontend for interactive testing (FastAPI + Plotly)*
+*v2.0 - Refactored architecture with layered design (API -> Wizard -> Validation -> Core -> Evaluation)*

@@ -1,12 +1,18 @@
-"""DOE optimization pipeline."""
+"""DOE optimization pipeline.
 
-from .two_step import optimize_doe, DOEResult
-from .evaluation import evaluate_result, evaluate_finite_distance_splitter, FiniteDistanceEvaluation
+This module provides:
+- OptimizationRunner: Unified entry point for DOE optimization
+- run_optimization: Convenience function for optimization
+- ProgressReporter: Progress callback support with cancellation
+"""
+
+from .runner import OptimizationRunner, run_optimization
+from .progress import ProgressReporter, ProgressInfo, CancellationToken
 
 __all__ = [
-    "optimize_doe",
-    "DOEResult",
-    "evaluate_result",
-    "evaluate_finite_distance_splitter",
-    "FiniteDistanceEvaluation",
+    "OptimizationRunner",
+    "run_optimization",
+    "ProgressReporter",
+    "ProgressInfo",
+    "CancellationToken",
 ]

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run python:*)",
+      "Bash(uv run uvicorn:*)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_close",
+      "Bash(set CUDA_VISIBLE_DEVICES=:*)",
+      "Bash(ping:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(set:*)",
+      "Bash(rm:*)",
+      "Bash(git -C \"C:/Code/dlwl\" status --short)"
+    ]
+  }
+}
