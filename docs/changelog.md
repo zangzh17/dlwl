@@ -1,5 +1,103 @@
 # 变更日志
 
+## 2025-01-13: Web Frontend重构与Analysis Upsample功能
+
+### 重构目标
+
+**核心思想**: 解耦前端与优化核心，使Target Pattern作为独立输入
+
+原架构中，Target Pattern由Wizard生成并直接传递给优化器。重构后：
+- 前端可存储/恢复Target Pattern
+- 优化请求可携带预生成的`target_pattern`
+- 优化核心从`target_pattern`重建必要参数
+
+### 新增功能
+
+#### 1. Analysis Upsample（分析上采样）
+
+在Results页面添加分析上采样选项（1x/2x/4x），用于高分辨率评估：
+
+| 传播类型 | 上采样方法 | 说明 |
+|---------|-----------|------|
+| FFT | DC中心裁剪 | 保持DC在中心，正确裁剪频谱 |
+| SFR | 直接设置output_resolution | 输出分辨率与上采样无关 |
+| ASM | Bin平均下采样 | ASM输出与输入同尺寸，需下采样匹配 |
+
+**新文件**: `doe_optimizer/evaluation/reevaluate.py`
+- `reevaluate_at_resolution()`: 统一入口
+- `_reevaluate_fft()`: FFT专用，DC中心裁剪
+- `_reevaluate_sfr()`: SFR专用
+- `_reevaluate_asm()`: ASM专用，bin平均
+
+#### 2. Effective Pixel Size显示
+
+Results页面显示实际有效像素尺寸：
+```
+effective_pixel_size = pixel_size / upsample_factor
+```
+
+### 已知问题
+
+#### SFR优化路径问题（待解决）
+
+当前端发送`target_pattern`时，SFR优化可能出现问题。
+
+**原因分析**:
+- `_create_wizard_output_from_target_pattern()`重建参数时，某些SFR特有参数可能不完整
+- 原始Wizard路径（无target_pattern）工作正常
+
+**临时方案**:
+- SFR模式建议不存储Target Pattern，每次重新生成
+- 或参考原始版本代码进行调试
+
+### 原始版本代码参考
+
+重构前的工作版本保存在：
+```
+dlwl-master/
+```
+
+该目录包含重构前的完整代码，可用于：
+- 对比调试SFR问题
+- 验证重构前后行为差异
+- 回滚参考
+
+### 相关文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `doe_optimizer/evaluation/reevaluate.py` | 新增：高分辨率重评估模块 |
+| `doe_optimizer/evaluation/__init__.py` | 导出reevaluate函数 |
+| `doe_optimizer/pipeline/runner.py` | 重构target_pattern处理逻辑 |
+| `web_frontend/backend/routes/optimize.py` | 添加/api/reevaluate端点 |
+| `web_frontend/frontend/js/results.js` | Analysis Upsample UI |
+| `web_frontend/frontend/index.html` | 上采样选择器 |
+
+### 技术细节
+
+#### FFT上采样裁剪
+
+```python
+# 错误方式：直接裁剪（DC不在中心）
+cropped = output[:h, :w]
+
+# 正确方式：DC中心裁剪
+center_h, center_w = H // 2, W // 2
+h_half, w_half = h // 2, w // 2
+cropped = output[center_h - h_half : center_h + h - h_half,
+                 center_w - w_half : center_w + w - w_half]
+```
+
+#### ASM Bin平均下采样
+
+```python
+# ASM输出与输入同物理尺寸，上采样后需下采样匹配target
+k = upsample_factor
+downsampled = output.reshape(h//k, k, w//k, k).mean(axis=(1, 3))
+```
+
+---
+
 ## 2024-12-30: 上采样支持与1D可视化改进
 
 ### 新增功能
