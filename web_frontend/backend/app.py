@@ -72,11 +72,41 @@ if FRONTEND_DIR.exists():
 
 @app.get("/")
 async def serve_index():
-    """Serve the main frontend page."""
+    """Serve the main frontend page with auto-versioned static files.
+
+    Automatically appends version query params based on file modification times.
+    This ensures browser cache is invalidated when files change.
+    """
+    import re
+    from fastapi.responses import HTMLResponse
+
     index_path = FRONTEND_DIR / "index.html"
-    if index_path.exists():
-        return FileResponse(index_path)
-    return {"message": "DOE Optimizer API", "docs": "/docs"}
+    if not index_path.exists():
+        return {"message": "DOE Optimizer API", "docs": "/docs"}
+
+    html_content = index_path.read_text(encoding='utf-8')
+
+    # Calculate version from max mtime of JS and CSS files
+    max_mtime = 0
+    for subdir in ["js", "css"]:
+        dir_path = FRONTEND_DIR / subdir
+        if dir_path.exists():
+            for f in dir_path.glob("*"):
+                if f.is_file():
+                    max_mtime = max(max_mtime, f.stat().st_mtime)
+
+    if max_mtime > 0:
+        version = f"v={int(max_mtime)}"
+        # Replace existing version strings (e.g., ?v=4.5 or ?v=1234567890)
+        html_content = re.sub(r'\?v=[\d.]+', f'?{version}', html_content)
+        # Also add version to CSS without existing version
+        html_content = re.sub(
+            r'(/css/styles\.css)(?!\?)',
+            rf'\1?{version}',
+            html_content
+        )
+
+    return HTMLResponse(content=html_content)
 
 
 @app.get("/health")

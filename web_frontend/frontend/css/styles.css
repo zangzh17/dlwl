@@ -533,6 +533,13 @@ body {
     flex-wrap: wrap;
 }
 
+.option-separator {
+    color: var(--text-light);
+    opacity: 0.4;
+    font-size: 0.9rem;
+    margin: 0 -0.3rem;
+}
+
 .checkbox-inline {
     display: flex;
     align-items: center;

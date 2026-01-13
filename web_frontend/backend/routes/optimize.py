@@ -41,6 +41,8 @@ class OptimizeRequest(BaseModel):
 
     # Advanced settings (part of DOE Settings)
     advanced: Optional[Dict[str, Any]] = Field(None)
+    # Note: Efficiency calculation derives target_indices from target_pattern
+    # No need for wizard-specific metadata
 
 
 class OptimizeResponse(BaseModel):
@@ -85,6 +87,7 @@ class ReevaluateResponse(BaseModel):
     phase: Optional[List[List[float]]] = None
     metrics: Optional[Dict[str, Any]] = None
     upsample_factor: Optional[int] = None
+    effective_pixel_size: Optional[float] = None  # Pixel size in meters (original / upsample)
     error: Optional[str] = None
 
 
@@ -207,6 +210,11 @@ async def get_result(task_id: str) -> ResultResponse:
             error="Task was cancelled"
         )
 
+    print(f"[Result Route] task.result keys: {list(task.result.keys()) if isinstance(task.result, dict) else type(task.result)}")
+    if isinstance(task.result, dict) and 'result' in task.result:
+        inner = task.result['result']
+        print(f"[Result Route] inner result keys: {list(inner.keys()) if isinstance(inner, dict) else type(inner)}")
+
     return ResultResponse(
         success=True,
         task_id=task_id,
@@ -279,13 +287,22 @@ async def reevaluate_result(task_id: str, request: ReevaluateRequest) -> Reevalu
                 error="Re-evaluation failed"
             )
 
+        # Debug logging
+        phase = reevaluated.get('phase')
+        simulated = reevaluated.get('simulated_intensity')
+        eff_pixel = reevaluated.get('effective_pixel_size')
+        print(f"[Reevaluate Route] phase type={type(phase)}, phase[0] len={len(phase[0]) if phase else 0}")
+        print(f"[Reevaluate Route] simulated type={type(simulated)}, simulated[0] len={len(simulated[0]) if simulated else 0}")
+        print(f"[Reevaluate Route] effective_pixel_size={eff_pixel}")
+
         return ReevaluateResponse(
             success=True,
             simulated_intensity=reevaluated.get('simulated_intensity'),
             target_intensity=reevaluated.get('target_intensity'),
             phase=reevaluated.get('phase'),
             metrics=reevaluated.get('metrics'),
-            upsample_factor=reevaluated.get('upsample_factor')
+            upsample_factor=reevaluated.get('upsample_factor'),
+            effective_pixel_size=reevaluated.get('effective_pixel_size')
         )
 
     except Exception as e:

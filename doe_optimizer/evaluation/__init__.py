@@ -6,6 +6,7 @@ This module provides:
 - EvaluationMetrics dataclass
 - Specialized evaluation for different DOE types
 - FiniteDistanceEvaluation for SFR-based evaluation with Airy disk integration
+- Unified re-evaluation at different resolutions
 """
 
 from .metrics import EvaluationMetrics
@@ -15,6 +16,11 @@ from .evaluator import (
     FiniteDistanceEvaluation,
     evaluate_finite_distance_splitter,
 )
+from .reevaluate import (
+    ReevaluationResult,
+    reevaluate_at_resolution,
+    extract_target_indices,
+)
 
 __all__ = [
     'EvaluationMetrics',
@@ -22,4 +28,7 @@ __all__ = [
     'evaluate_result',
     'FiniteDistanceEvaluation',
     'evaluate_finite_distance_splitter',
+    'ReevaluationResult',
+    'reevaluate_at_resolution',
+    'extract_target_indices',
 ]

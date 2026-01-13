@@ -8,6 +8,8 @@ const ResultsUI = {
     currentIntensityView: 'target',
     useLogScale: false,
     analysisUpsample: 2,
+    phaseUnit: 'um',  // 'um' or 'pixel'
+    isReevaluating: false,  // Flag to prevent concurrent re-evaluations
 
     /**
      * Initialize results panel
@@ -45,6 +47,14 @@ const ResultsUI = {
         document.querySelectorAll('input[name="phase_view"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 this.currentPhaseView = e.target.value;
+                this.renderPhaseChart();
+            });
+        });
+
+        // Phase unit toggle (um vs pixel)
+        document.querySelectorAll('input[name="phase_unit"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                this.phaseUnit = e.target.value;
                 this.renderPhaseChart();
             });
         });
@@ -159,7 +169,7 @@ const ResultsUI = {
     /**
      * Render the results panel
      */
-    render() {
+    async render() {
         // Update single period option visibility - show for periodic cases
         const singlePeriodOption = document.getElementById('single-period-option');
         if (singlePeriodOption) {
@@ -174,6 +184,12 @@ const ResultsUI = {
         this.renderIntensityChart();
         this.renderEfficiencyChart();
         this.renderOrderPositions();
+
+        // Trigger re-evaluation on initial load if analysisUpsample > 1
+        // This ensures the displayed results match the default upsample setting
+        if (this.analysisUpsample > 1 && !AppState.result.upsample_factor) {
+            await this.reevaluateAtResolution(this.analysisUpsample);
+        }
     },
 
     /**
@@ -281,6 +297,12 @@ const ResultsUI = {
         const pixelMultiplier = AppState.optimizationSettings.pixel_multiplier || 1;
         const doePixelSizeUm = physicalPixelSizeUm * pixelMultiplier;  // Effective pixel for annotation
 
+        // Use effective_pixel_size from reevaluation if available (accounts for upsampling)
+        // effective_pixel_size = original_pixel_size / upsample_factor
+        const effectivePixelSizeFromResult = result.effective_pixel_size
+            ? result.effective_pixel_size * 1e6  // Convert from meters to um
+            : null;
+
         // Choose data based on view
         let phase = result.phase;
         let title = 'Phase Distribution';
@@ -296,61 +318,97 @@ const ResultsUI = {
             singlePeriodOption.style.display = isPeriodic ? '' : 'none';
         }
 
+        // Check if we have upsampled data from re-evaluation
+        const upsampleFactor = result.upsample_factor || 1;
+        const hasUpsampledPhase = upsampleFactor > 1 && result.phase;
+        const numPeriods = AppState.structuredParams.num_periods || [1, 1];
+
         if (this.currentPhaseView === 'period' && isPeriodic) {
-            // Single period view
+            // Single period view - show original or upsampled single period
+            if (hasUpsampledPhase) {
+                // Use upsampled phase (still single period, higher resolution)
+                phase = result.phase;
+            } else {
+                phase = AppState.result.phase_period || result.phase;
+            }
             title = 'Phase Distribution (Single Period)';
             isFullDevice = false;
         } else if (isPeriodic) {
             // Full device view for periodic
-            // Check if backend provided combined phase with Fresnel (Strategy 2)
             if (result.device_phase_with_fresnel) {
+                // Strategy 2: combined phase with Fresnel
                 phase = result.device_phase_with_fresnel;
                 title = 'Phase Distribution (Full Device + Fresnel Lens)';
             } else {
-                // Tile the phase manually
-                const numPeriods = AppState.structuredParams.num_periods || [1, 1];
+                // Get base phase (upsampled or original)
+                const basePhase = hasUpsampledPhase ? result.phase : (AppState.result.phase_period || result.phase);
+
+                // Tile single period by num_periods to show full device
                 const tilesY = Math.max(1, Math.floor(numPeriods[0]));
                 const tilesX = Math.max(1, Math.floor(numPeriods[1]));
 
                 if (tilesY > 1 || tilesX > 1) {
-                    phase = this.tileArray(result.phase, tilesY, tilesX);
+                    phase = this.tileArray(basePhase, tilesY, tilesX);
                     title = `Phase Distribution (Full Device: ${tilesY}×${tilesX} periods)`;
                 } else {
+                    phase = basePhase;
                     title = 'Phase Distribution (Full Device = 1 Period)';
                 }
             }
+            isFullDevice = true;
         } else {
             // Non-periodic (ASM/SFR) - phase is already full device
+            if (hasUpsampledPhase) {
+                phase = result.phase;
+            }
             title = 'Phase Distribution (Full Device)';
+            isFullDevice = true;
         }
 
-        // Get array dimensions
+        // Get array dimensions (after tiling)
         const numRows = phase.length;
         const numCols = Array.isArray(phase[0]) ? phase[0].length : 1;
 
-        // Calculate physical size - device dimensions are fixed regardless of pixel_multiplier
-        // Physical size = doe_pixels × ORIGINAL_pixel_size (full device)
-        // or = period_pixels × ORIGINAL_pixel_size (single period)
-        // Note: pixel_multiplier affects optimization resolution, not physical device size
-        const periodPixels = AppState.structuredParams.period_pixels || numCols;
-        const physicalSizeUm = isFullDevice
-            ? (AppState.structuredParams.doe_pixels?.[0] || numCols) * physicalPixelSizeUm
-            : periodPixels * physicalPixelSizeUm;
+        // Calculate physical size based on what's actually displayed
+        // Each pixel in the displayed phase = pixel_size (1 um typically)
+        // Physical size = numCols × pixel_size (since each array pixel = one DOE pixel)
+        const periodPixels = AppState.structuredParams.period_pixels || 21;
+        const periodSizeUm = periodPixels * physicalPixelSizeUm;
 
-        // For axis labeling, compute effective pixel based on actual array size
-        const effectivePixelSizeUm = physicalSizeUm / numCols;
+        // Calculate physical size and effective pixel size
+        let physicalSizeUm, effectivePixelSizeUm;
 
-        // Determine unit for display based on physical size
-        let unit = 'um';
-        let scale = 1;
-        if (physicalSizeUm > 1000) {
+        if (hasUpsampledPhase) {
+            // Upsampled: effective pixel size is smaller
+            effectivePixelSizeUm = effectivePixelSizeFromResult || (physicalPixelSizeUm / upsampleFactor);
+            // Physical size = numCols * effectivePixelSize
+            physicalSizeUm = numCols * effectivePixelSizeUm;
+        } else {
+            // Original resolution
+            effectivePixelSizeUm = physicalPixelSizeUm;
+            physicalSizeUm = numCols * physicalPixelSizeUm;
+        }
+
+        // Determine unit for display based on user selection
+        const usePixelUnit = this.phaseUnit === 'pixel';
+        let unit, scale;
+        if (usePixelUnit) {
+            unit = 'pixel';
+            scale = 1 / effectivePixelSizeUm;  // Convert from um to pixels
+        } else if (physicalSizeUm > 1000) {
             unit = 'mm';
             scale = 1e-3;
+        } else {
+            unit = 'um';
+            scale = 1;
         }
 
         // For phase display: Full device is always 2D heatmap
         // Single period can be 1D line plot if the period is effectively 1D
         const showAs1D = !isFullDevice && this.isPhaseArray1D(phase);
+
+        // Build annotation text showing pixel size (simple, no extra info)
+        const annotationText = `Pixel: ${effectivePixelSizeUm.toFixed(2)} um`;
 
         if (showAs1D) {
             // Single period with narrow dimension - show as 1D line plot
@@ -364,8 +422,13 @@ const ResultsUI = {
                 yData = Array.isArray(phase[0]) ? phase[0] : phase;
             }
 
-            // Create x-axis in physical units
-            const xData = yData.map((_, i) => i * effectivePixelSizeUm * scale);
+            // Create x-axis based on unit selection
+            let xData;
+            if (usePixelUnit) {
+                xData = yData.map((_, i) => i);  // Direct pixel index
+            } else {
+                xData = yData.map((_, i) => i * effectivePixelSizeUm * scale);
+            }
 
             const trace = {
                 x: xData,
@@ -384,16 +447,21 @@ const ResultsUI = {
                 margin: { t: 40, r: 20, b: 50, l: 60 },
                 annotations: [{
                     x: 0.02, y: 0.98, xref: 'paper', yref: 'paper',
-                    text: `Pixel: ${doePixelSizeUm.toFixed(2)} um`,
+                    text: annotationText,
                     showarrow: false, font: { size: 10, color: '#666' },
                     xanchor: 'left', yanchor: 'top'
                 }]
             }, { responsive: true });
         } else {
-            // 2D heatmap with physical units (always for full device)
-            // Create axis arrays in physical units
-            const xAxis = Array.from({ length: numCols }, (_, i) => i * effectivePixelSizeUm * scale);
-            const yAxis = Array.from({ length: numRows }, (_, i) => i * effectivePixelSizeUm * scale);
+            // 2D heatmap - axis based on unit selection
+            let xAxis, yAxis;
+            if (usePixelUnit) {
+                xAxis = Array.from({ length: numCols }, (_, i) => i);
+                yAxis = Array.from({ length: numRows }, (_, i) => i);
+            } else {
+                xAxis = Array.from({ length: numCols }, (_, i) => i * effectivePixelSizeUm * scale);
+                yAxis = Array.from({ length: numRows }, (_, i) => i * effectivePixelSizeUm * scale);
+            }
 
             const trace = {
                 z: phase,
@@ -412,7 +480,7 @@ const ResultsUI = {
                 margin: { t: 40, r: 80, b: 50, l: 60 },
                 annotations: [{
                     x: 0.02, y: 0.98, xref: 'paper', yref: 'paper',
-                    text: `Pixel: ${doePixelSizeUm.toFixed(2)} um`,
+                    text: annotationText,
                     showarrow: false, font: { size: 10, color: '#666' },
                     xanchor: 'left', yanchor: 'top'
                 }]
@@ -432,6 +500,9 @@ const ResultsUI = {
             container.innerHTML = '<p>No intensity data available.</p>';
             return;
         }
+
+        // Clear any existing content (including loading messages)
+        container.innerHTML = '';
 
         const is1D = this.is1D();
         const useLog = this.useLogScale;
@@ -690,17 +761,17 @@ const ResultsUI = {
             return;
         }
 
-        // Get order data from splitter_info or metadata
-        const splitterInfo = result.splitter_info || AppState.metadata || {};
+        // Get display data from wizard metadata (read-only, for visualization)
+        // Note: Efficiency calculation is done server-side from target_pattern
+        const wizardMetadata = AppState.metadata || {};
         const metrics = result.metrics || {};
 
-        const orderPositions = splitterInfo.order_positions || [];
-        const orderAngles = splitterInfo.order_angles || AppState.computedValues?.order_angles || [];
-        const workingOrders = splitterInfo.working_orders || AppState.computedValues?.working_orders || [];
+        const orderAngles = wizardMetadata.order_angles || [];
+        const workingOrders = wizardMetadata.working_orders || [];
         const orderEfficiencies = metrics.order_efficiencies || [];
 
-        if (workingOrders.length === 0 && orderPositions.length === 0) {
-            container.innerHTML = '<p>No order position data available.</p>';
+        if (orderEfficiencies.length === 0) {
+            container.innerHTML = '<p>No efficiency data available.</p>';
             return;
         }
 
@@ -754,10 +825,9 @@ const ResultsUI = {
      */
     renderOrderPositions2D(container, workingOrders, orderAngles, orderEfficiencies) {
         // Check for physical positions (Strategy 2 or finite distance)
-        const result = AppState.result;
-        const splitterInfo = result.splitter_info || AppState.metadata || {};
-        const physicalPositions = splitterInfo.physical_positions || [];
-        const strategy = splitterInfo.strategy;
+        const wizardMetadata = AppState.metadata || {};
+        const physicalPositions = wizardMetadata.physical_positions || [];
+        const strategy = wizardMetadata.strategy || AppState.structuredParams.propagation_type;
 
         let x, y, text, xTitle, yTitle;
 
@@ -857,17 +927,32 @@ const ResultsUI = {
             return;
         }
 
+        // Prevent concurrent re-evaluations
+        if (this.isReevaluating) {
+            console.log('Re-evaluation already in progress, skipping');
+            return;
+        }
+
+        this.isReevaluating = true;
+
         // Show loading state
         const container = document.getElementById('intensity-chart');
         const originalContent = container.innerHTML;
         container.innerHTML = '<p class="loading">Re-evaluating at ' + upsampleFactor + 'x resolution...</p>';
 
+        // Create abort controller for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);  // 30 second timeout
+
         try {
             const response = await fetch(`/api/reevaluate/${AppState.taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ upsample_factor: upsampleFactor })
+                body: JSON.stringify({ upsample_factor: upsampleFactor }),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             const data = await response.json();
 
@@ -885,6 +970,12 @@ const ResultsUI = {
                 if (data.metrics) {
                     AppState.result.metrics = data.metrics;
                 }
+                if (data.upsample_factor) {
+                    AppState.result.upsample_factor = data.upsample_factor;
+                }
+                if (data.effective_pixel_size) {
+                    AppState.result.effective_pixel_size = data.effective_pixel_size;
+                }
 
                 // Re-render all charts with new data
                 this.renderMetrics();
@@ -901,9 +992,17 @@ const ResultsUI = {
                 container.innerHTML = originalContent;
             }
         } catch (err) {
-            console.error('Re-evaluation error:', err);
-            App.showToast('Re-evaluation failed', 'error');
+            clearTimeout(timeoutId);
+            if (err.name === 'AbortError') {
+                console.error('Re-evaluation timed out');
+                App.showToast('Re-evaluation timed out', 'error');
+            } else {
+                console.error('Re-evaluation error:', err);
+                App.showToast('Re-evaluation failed', 'error');
+            }
             container.innerHTML = originalContent;
+        } finally {
+            this.isReevaluating = false;
         }
     },
 

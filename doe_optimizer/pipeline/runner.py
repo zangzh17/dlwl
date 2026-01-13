@@ -9,7 +9,7 @@ This module provides the main orchestrator that uses the layered architecture:
 5. Evaluation and visualization
 """
 
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List, Tuple
 from dataclasses import dataclass
 import torch
 import numpy as np
@@ -279,13 +279,15 @@ class OptimizationRunner:
         # Determine propagation type
         prop_type = PropagationType(propagation_type) if propagation_type else PropagationType.FFT
 
+        # Get advanced settings (needed for target_margin in SFR)
+        advanced = user_input.get('advanced', {})
+
         # Create appropriate structured params based on propagation type
         if prop_type == PropagationType.FFT:
             params = FFTParams(
                 physical=physical,
                 period_pixels=tuple(simulation_pixels),
-                doe_total_pixels=tuple(doe_pixels),
-                simulation_pixels=tuple(simulation_pixels)
+                doe_total_pixels=tuple(doe_pixels)
             )
         elif prop_type == PropagationType.ASM:
             # Calculate target pixels for ASM
@@ -307,20 +309,22 @@ class OptimizationRunner:
             )
         elif prop_type == PropagationType.SFR:
             # Calculate target size and resolution for SFR
-            # Note: target_resolution is independent of DOE pixel_size for SFR
-            # We cap it to max_resolution to avoid memory issues
-            max_res = self.max_resolution
+            # IMPORTANT: target_resolution must match the target_pattern shape!
+            # The target_pattern was already created by wizard with correct resolution.
+            # target_size must include margin factor to match wizard coordinate system.
+            target_margin = advanced.get('target_margin', 0.1)
+            margin_factor = 1.0 + target_margin  # Default: 1.1
+
+            # Use target_pattern shape as target_resolution (must match exactly!)
+            target_res = tuple(target_tensor.shape[-2:])
+
             if target_span and working_distance:
-                target_size_m = (target_span, target_span)
-                # Cap target resolution to max_resolution
-                ideal_res = int(target_span / pixel_size)
-                capped_res = min(ideal_res, max_res)
-                target_res = (capped_res, capped_res)
+                # Apply margin factor to target_size (must match wizard!)
+                target_size_m = (target_span * margin_factor, target_span * margin_factor)
             else:
                 # Fallback: use DOE size as target
                 doe_size_m = doe_pixels[0] * pixel_size
                 target_size_m = (doe_size_m, doe_size_m)
-                target_res = tuple(simulation_pixels)
 
             params = SFRParams(
                 physical=physical,
@@ -335,17 +339,13 @@ class OptimizationRunner:
             params = FFTParams(
                 physical=physical,
                 period_pixels=tuple(simulation_pixels),
-                doe_total_pixels=tuple(doe_pixels),
-                simulation_pixels=tuple(simulation_pixels)
+                doe_total_pixels=tuple(doe_pixels)
             )
 
-        # Create propagator config
-        propagator_config = PropagatorConfig(
-            prop_type=prop_type,
-            feature_size=(pixel_size, pixel_size),
-            wavelength=wavelength,
-            working_distance=working_distance
-        )
+        # Create propagator config from structured params
+        # This ensures all propagation-specific parameters are included
+        # (e.g., output_size, output_resolution for SFR)
+        propagator_config = params.to_propagator_config()
 
         # Create optimization config from user input
         opt_input = user_input.get('optimization', {})
@@ -373,6 +373,8 @@ class OptimizationRunner:
         )
 
         # Metadata from advanced settings
+        # Note: Efficiency calculation derives target_indices from target_pattern
+        # No need for wizard-specific metadata
         advanced = user_input.get('advanced', {})
         metadata = {
             'target_margin': advanced.get('target_margin', 0.1),
@@ -519,6 +521,16 @@ class OptimizationRunner:
         # Move target to device
         target = target.to(device=self.device, dtype=self.dtype)
 
+        # Debug: print shapes and config
+        prop_config = wizard_output.propagator_config
+        print(f"[Optimizer] prop_type: {prop_config.prop_type}")
+        print(f"[Optimizer] target shape: {target.shape}")
+        print(f"[Optimizer] feature_size: {prop_config.feature_size}")
+        if prop_config.output_size:
+            print(f"[Optimizer] output_size: {prop_config.output_size}")
+        if prop_config.output_resolution:
+            print(f"[Optimizer] output_resolution: {prop_config.output_resolution}")
+
         # Build propagator
         propagator_builder = PropagatorBuilder(
             wizard_output.propagator_config,
@@ -635,9 +647,19 @@ class OptimizationRunner:
             output_field = propagator(field)
             output_amp = output_field.abs()
 
+            # Debug: print shapes on first iteration
+            if i == 0:
+                print(f"[Optimizer] field shape: {field.shape}")
+                print(f"[Optimizer] output_field shape: {output_field.shape}")
+                print(f"[Optimizer] target_intensity shape: {target_intensity.shape}")
+
             # Compute normalized intensity for loss
             output_intensity = output_amp ** 2
             output_intensity_norm = output_intensity / (output_intensity.sum() + 1e-10)
+
+            # Debug: print loss on first and every 100th iteration
+            if i == 0 or i == 100:
+                print(f"[Optimizer] iter {i}: loss={loss_fn(output_intensity_norm, target_intensity).item():.6f}")
 
             # Compute loss in intensity space
             loss = loss_fn(output_intensity_norm, target_intensity)
@@ -669,6 +691,11 @@ class OptimizationRunner:
         phase_np = phase.detach().squeeze(0).squeeze(0).cpu().numpy() % (2 * np.pi)
         target_np = target.detach().squeeze(0).squeeze(0).cpu().numpy() ** 2  # Intensity
         simulated_np = output_amp.detach().squeeze(0).squeeze(0).cpu().numpy() ** 2
+
+        # Normalize both to unit total energy for fair comparison and display
+        # This matches how target was originally normalized in wizard
+        target_np = target_np / (target_np.sum() + 1e-10)
+        simulated_np = simulated_np / (simulated_np.sum() + 1e-10)
 
         # Store reduced-resolution arrays for metrics calculation BEFORE expansion
         # These are at the actual optimization resolution
@@ -832,42 +859,46 @@ class OptimizationRunner:
             original_resolution = None
             reduced_resolution = None
 
-        # Get order positions
-        order_positions = metadata.get('order_positions', [])
-        working_orders = metadata.get('working_orders', [])
-        strategy = metadata.get('strategy')
+        # Get target indices from target pattern (non-zero positions)
+        # This is DOE-type agnostic - works for splitter, diffuser, etc.
+        target = result.target_for_metrics if result.target_for_metrics is not None else result.target_intensity
+        target_indices = self._extract_target_indices(target)
 
-        if not order_positions:
-            # No order info, use loss-based estimate
+        if not target_indices:
+            # No target points, use loss-based estimate
             return MetricsData(total_efficiency=1.0 - result.final_loss)
 
-        # Scale order positions if using reduced resolution
+        # Determine integration mode from propagation type (not splitter-specific)
+        prop_type = wizard_output.propagator_config.prop_type.value if hasattr(wizard_output.propagator_config.prop_type, 'value') else str(wizard_output.propagator_config.prop_type)
+        use_disk_integration = prop_type in ('asm', 'sfr')
+
+        # Scale target indices if using reduced resolution
         if pixel_multiplier > 1 and original_resolution and reduced_resolution:
             # Scale factor: reduced / original
             scale_y = reduced_resolution[0] / original_resolution[0]
             scale_x = reduced_resolution[1] / original_resolution[1]
             # Scale positions and deduplicate to avoid counting same pixel multiple times
             scaled_set = set()
-            for py, px in order_positions:
+            for py, px in target_indices:
                 scaled_pos = (int(round(py * scale_y)), int(round(px * scale_x)))
                 scaled_set.add(scaled_pos)
             scaled_positions = list(scaled_set)
         else:
-            scaled_positions = order_positions
+            scaled_positions = target_indices
 
         total_intensity = simulated.sum()
         if total_intensity < 1e-10:
             return MetricsData(total_efficiency=0.0)
 
-        # Compute efficiency for each order
+        # Compute efficiency for each target spot
         # Handle both 1D (H, 1) and 2D (H, W) cases
-        order_efficiencies = []
+        spot_efficiencies = []
         h = simulated.shape[0]
         w = simulated.shape[1] if len(simulated.shape) > 1 else 1
 
         # For ASM/SFR (physical space), integrate over Airy disk
         # For FFT (k-space), use single pixel values
-        if strategy == 'asm' or strategy == 'sfr':
+        if use_disk_integration:
             # Calculate Airy disk radius for physical space integration
             airy_radius_pixels = self._compute_airy_radius(params)
             airy_radius_pixels = max(3, airy_radius_pixels)  # Minimum 3 pixels
@@ -879,7 +910,7 @@ class OptimizationRunner:
                 eff = self._integrate_over_disk(
                     simulated, py, px, airy_radius_pixels, total_intensity
                 )
-                order_efficiencies.append(eff)
+                spot_efficiencies.append(eff)
         else:
             # FFT (k-space): single pixel values
             for py, px in scaled_positions:
@@ -888,19 +919,19 @@ class OptimizationRunner:
                         eff = float(simulated[py, px]) / float(total_intensity)
                     else:
                         eff = float(simulated[py]) / float(total_intensity)
-                    order_efficiencies.append(eff)
+                    spot_efficiencies.append(eff)
                 else:
-                    order_efficiencies.append(0.0)
+                    spot_efficiencies.append(0.0)
 
         # Aggregate metrics
-        total_efficiency = sum(order_efficiencies)
-        mean_efficiency = np.mean(order_efficiencies) if order_efficiencies else 0.0
-        std_efficiency = np.std(order_efficiencies) if order_efficiencies else 0.0
+        total_efficiency = sum(spot_efficiencies)
+        mean_efficiency = np.mean(spot_efficiencies) if spot_efficiencies else 0.0
+        std_efficiency = np.std(spot_efficiencies) if spot_efficiencies else 0.0
 
         # Uniformity: 1 - (max - min) / (max + min)
-        if order_efficiencies and max(order_efficiencies) + min(order_efficiencies) > 1e-10:
-            uniformity = 1.0 - (max(order_efficiencies) - min(order_efficiencies)) / (
-                max(order_efficiencies) + min(order_efficiencies)
+        if spot_efficiencies and max(spot_efficiencies) + min(spot_efficiencies) > 1e-10:
+            uniformity = 1.0 - (max(spot_efficiencies) - min(spot_efficiencies)) / (
+                max(spot_efficiencies) + min(spot_efficiencies)
             )
         else:
             uniformity = 0.0
@@ -910,8 +941,34 @@ class OptimizationRunner:
             uniformity=uniformity,
             mean_efficiency=mean_efficiency,
             std_efficiency=std_efficiency,
-            order_efficiencies=order_efficiencies,
+            order_efficiencies=spot_efficiencies,  # Keep field name for API compatibility
         )
+
+    def _extract_target_indices(self, target: np.ndarray, threshold: float = 1e-6) -> List[Tuple[int, int]]:
+        """Extract target point indices from target pattern.
+
+        Finds all positions where target intensity is above threshold.
+        This is DOE-type agnostic - works for any target pattern.
+
+        Args:
+            target: Target intensity array (1D or 2D)
+            threshold: Minimum intensity to consider as target point
+
+        Returns:
+            List of (py, px) index tuples
+        """
+        if target is None:
+            return []
+
+        # Handle 1D case - return as (row=0, col=position)
+        if target.ndim == 1 or (target.ndim == 2 and min(target.shape) == 1):
+            target_1d = target.reshape(-1)
+            indices = np.where(target_1d > threshold)[0]
+            return [(0, int(i)) for i in indices]
+
+        # 2D case
+        positions = np.where(target > threshold)
+        return [(int(py), int(px)) for py, px in zip(positions[0], positions[1])]
 
     def _compute_airy_radius(self, params) -> int:
         """Compute Airy disk radius in pixels for ASM/SFR."""

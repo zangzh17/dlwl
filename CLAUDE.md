@@ -1,4 +1,4 @@
-# DOE Optimizer v3.0
+# DOE Optimizer v3.3
 
 A Python backend for designing and optimizing Diffractive Optical Elements (DOEs) with a web-based testing interface.
 
@@ -21,7 +21,8 @@ dlwl/
 │   ├── validation/         # Parameter validation
 │   ├── core/               # Propagation, loss functions, optimizer
 │   ├── pipeline/           # OptimizationRunner, progress reporting
-│   ├── evaluation/         # Result evaluation, metrics
+│   ├── evaluation/         # Result evaluation, metrics, re-evaluation
+│   │   └── reevaluate.py   # Unified re-evaluation at different resolutions
 │   ├── visualization/      # Plotly data export
 │   └── utils/              # FFT, image, math utilities
 ├── web_frontend/           # Web interface (v3.0)
@@ -116,6 +117,57 @@ if response.success:
 - **Lens/Lens Array**: Focusing elements
 - **Custom**: User-defined target patterns
 
+## Architecture Principles
+
+### CRITICAL: Decoupling Wizards from Core Pipeline
+
+**Wizards are ONLY for generating DOE Settings. The core pipeline (optimization, evaluation, metrics) must NEVER depend on wizard-specific concepts.**
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌─────────┐
+│   Wizard    │ ──► │ DOE Settings │ ──► │ Optimization│ ──► │ Results │
+│ (splitter,  │     │ (universal)  │     │   (generic) │     │(metrics)│
+│  diffuser,  │     │              │     │             │     │         │
+│  lens, etc) │     │              │     │             │     │         │
+└─────────────┘     └──────────────┘     └─────────────┘     └─────────┘
+      │                    │                    │                  │
+   Generates          Core data           Only sees           Derived from
+   parameters         structure        DOE Settings         target_pattern
+```
+
+**DOE Settings (universal):**
+```python
+{
+    'target_pattern': [...],      # 2D target intensity distribution
+    'wavelength': 532e-9,
+    'pixel_size': 1e-6,
+    'propagation_type': 'fft',    # 'fft', 'asm', 'sfr'
+    'simulation_pixels': [64, 64],
+    # ... other physical params
+}
+```
+
+**What the pipeline does NOT know:**
+- What wizard generated the parameters (splitter? diffuser? custom?)
+- "Order positions", "working orders" (splitter-specific concepts)
+- Grid mode (natural/uniform) - wizard concepts
+
+**Efficiency Calculation:**
+- Target indices are derived from `target_pattern` (non-zero positions)
+- No wizard metadata is passed to optimization/evaluation
+- `_extract_target_indices(target_pattern)` finds target spots automatically
+
+**Display Metadata (frontend only):**
+- Wizard metadata (angles, order indices) is stored in `AppState.metadata`
+- Used ONLY for visualization (e.g., showing angles on charts)
+- NEVER used for efficiency calculation
+
+**Why this matters:**
+1. Adding new DOE types doesn't require changing the pipeline
+2. Efficiency calculation works for ANY target pattern
+3. Clear separation of concerns
+4. Easier testing and maintenance
+
 ## Key APIs
 
 ### OptimizationRunner
@@ -184,8 +236,44 @@ Test cases cover:
 ## Key Implementation Notes
 
 ### Efficiency Calculation
-- FFT k-space: Use `integration_radius=0` (point-like orders)
-- Physical (ASM/SFR): Use Airy disk integration
+- Target indices derived from `target_pattern` (non-zero positions)
+- FFT k-space: Single pixel sampling at target indices
+- Physical (ASM/SFR): Airy disk integration around target indices
+
+### Analysis Upsample (Re-evaluation)
+
+Unified re-evaluation module: `doe_optimizer/evaluation/reevaluate.py`
+
+**Core concept**: Upsampling k× means k² more samples covering the SAME physical/angular range.
+- Device size unchanged
+- Pixel count increases
+- Effective pixel size decreases: `effective_pixel_size = original_pixel_size / upsample_factor`
+
+**FFT propagation**:
+- Uses **tiling**: `np.tile(phase, (N, N))` - more periods = sharper diffraction
+- Target indices scale relative to center: `new_pos = center_new + (old_pos - center_old) * N`
+- Same angular range, sharper k-space peaks
+
+**ASM/SFR propagation**:
+- Uses **interpolation**: `scipy.ndimage.zoom(phase, N, order=3)`
+- Propagate with smaller feature_size (effective_pixel_size)
+- Same physical range, more output samples
+
+**Usage**:
+```python
+from doe_optimizer.evaluation import reevaluate_at_resolution
+
+result = reevaluate_at_resolution(
+    phase=phase_np,
+    target=target_np,
+    upsample_factor=2,
+    propagation_type='fft',  # 'fft', 'asm', 'sfr', 'periodic_fresnel'
+    pixel_size=1e-6,
+    wavelength=532e-9
+)
+# result.phase - tiled/upsampled phase
+# result.effective_pixel_size - pixel_size / upsample_factor
+```
 
 ### Upsampling Normalization
 - 1D arrays: Normalize by `upsample_factor^2`
@@ -232,8 +320,17 @@ The codebase has built-in CUDA error recovery:
 - `wizard/base.py`: `_get_device()` tests CUDA before use
 - `routes/wizard.py`: `_generate_params_with_cuda_recovery()` falls back gracefully
 
+### Browser Caching Issues
+
+When frontend JS/CSS changes don't take effect:
+1. Hard refresh: Ctrl+Shift+R (or Cmd+Shift+R on Mac)
+2. The backend auto-versions static files using mtime (see `backend/app.py`)
+3. Check DevTools Network tab - ensure files are being fetched, not cached
+
 ---
 
+*v3.3 - Unified re-evaluation module for all propagation types (FFT tiling, ASM/SFR interpolation)*
+*v3.2 - Decoupled wizards from core pipeline: efficiency calculation now derives target_indices from target_pattern*
 *v3.1 - Added Strategy 2 (Periodic+Fresnel) propagation, improved UI with Reference Values*
 *v3.0 - Added web frontend for interactive testing (FastAPI + Plotly)*
 *v2.0 - Refactored architecture with layered design (API -> Wizard -> Validation -> Core -> Evaluation)*

@@ -22,6 +22,10 @@ from doe_optimizer import (
     CancellationToken,
     ProgressInfo,
 )
+from doe_optimizer.evaluation.reevaluate import (
+    reevaluate_at_resolution,
+    extract_target_indices,
+)
 
 from ..config import config
 
@@ -295,166 +299,108 @@ class TaskManager:
     ) -> Optional[Dict[str, Any]]:
         """Re-evaluate optimization result at different resolution.
 
-        Takes the optimized phase and re-propagates at higher resolution
-        for more accurate metrics.
+        Uses unified reevaluation module that handles all propagation types:
+        - FFT: tiles phase k×k times (more periods → sharper diffraction)
+        - ASM/SFR: interpolates phase to higher resolution
 
         Args:
             task_id: Task ID of completed optimization
             upsample_factor: Resolution multiplier (1-8)
 
         Returns:
-            Dict with 'simulated_intensity', 'target_intensity', 'phase' and 'metrics', or None on error
+            Dict with 'simulated_intensity', 'target_intensity', 'phase',
+            'metrics', 'upsample_factor', and 'effective_pixel_size', or None on error
         """
         import numpy as np
-        import torch
 
         task = self.tasks.get(task_id)
-        if not task or task.status != TaskStatus.COMPLETED or not task.result:
+        if not task:
+            print(f"[Reevaluate] Task {task_id} not found")
+            return None
+        if task.status != TaskStatus.COMPLETED:
+            print(f"[Reevaluate] Task status is {task.status}, not COMPLETED")
+            return None
+        if not task.result:
+            print(f"[Reevaluate] Task result is empty")
             return None
 
         result = task.result.get('result', {})
         phase_data = result.get('phase')
-        request_data = task.request_data
+        target_data = result.get('target_intensity')
+        request_data = task.request_data or {}
 
         if not phase_data:
+            print(f"[Reevaluate] No phase data found in result")
             return None
 
-        # If upsample_factor is 1, just return the original data
-        if upsample_factor == 1:
+        # Extract parameters from request_data
+        propagation_type = request_data.get('propagation_type', 'fft')
+        pixel_size = request_data.get('pixel_size', 1e-6)  # Default 1um
+        wavelength = request_data.get('wavelength', 532e-9)
+        working_distance = request_data.get('working_distance')
+        target_size = request_data.get('target_size')
+
+        # Convert to numpy arrays
+        phase_np = np.array(phase_data, dtype=np.float32)
+        target_np = np.array(target_data, dtype=np.float32) if target_data else None
+
+        # Extract target indices
+        target_indices = extract_target_indices(target_np) if target_np is not None else []
+
+        print(f"[Reevaluate] Phase shape: {phase_np.shape}, propagation: {propagation_type}, pixel_size: {pixel_size*1e6:.2f}um")
+
+        # If upsample_factor is 1, just return the original data with effective_pixel_size
+        if upsample_factor <= 1:
             return {
                 'simulated_intensity': result.get('simulated_intensity'),
                 'target_intensity': result.get('target_intensity'),
                 'phase': result.get('phase'),
                 'metrics': result.get('metrics', {}),
-                'upsample_factor': 1
+                'upsample_factor': 1,
+                'effective_pixel_size': pixel_size
             }
 
-        # Try to re-propagate with new resolution
-        # Note: Skip re-propagation for now due to Windows compatibility issues
-        # and use fallback interpolation instead
-        USE_REPROPAGATION = False
+        try:
+            # Use unified reevaluation function
+            reeval_result = reevaluate_at_resolution(
+                phase=phase_np,
+                target=target_np if target_np is not None else np.zeros_like(phase_np),
+                upsample_factor=upsample_factor,
+                propagation_type=propagation_type,
+                pixel_size=pixel_size,
+                wavelength=wavelength,
+                working_distance=working_distance,
+                target_size=target_size,
+                target_indices=target_indices
+            )
 
-        if request_data and USE_REPROPAGATION:
-            try:
-                from doe_optimizer.core.propagator_factory import PropagatorBuilder
-                from doe_optimizer.params.base import PropagationType, PropagatorConfig
+            print(f"[Reevaluate] Result phase shape: {reeval_result.phase.shape}, effective_pixel: {reeval_result.effective_pixel_size*1e6:.3f}um")
 
-                # Build propagator config directly from DOE Settings (no wizard call)
-                wavelength = request_data.get('wavelength', 532e-9)
-                pixel_size = request_data.get('pixel_size', 1e-6)
-                propagation_type = request_data.get('propagation_type', 'fft')
-                working_distance = request_data.get('working_distance')
+            return {
+                'simulated_intensity': reeval_result.simulated_intensity.tolist(),
+                'target_intensity': reeval_result.target_intensity.tolist(),
+                'phase': reeval_result.phase.tolist(),  # Tiled/upsampled phase
+                'metrics': reeval_result.metrics,
+                'upsample_factor': reeval_result.upsample_factor,
+                'effective_pixel_size': reeval_result.effective_pixel_size
+            }
 
-                prop_type = PropagationType(propagation_type) if propagation_type else PropagationType.FFT
-                propagator_config = PropagatorConfig(
-                    prop_type=prop_type,
-                    feature_size=(pixel_size, pixel_size),
-                    wavelength=wavelength,
-                    working_distance=working_distance
-                )
-
-                # Get device - use CPU on Windows to avoid CUDA issues
-                device = torch.device('cpu')
-                print(f"[Reevaluate] Using device: {device}")
-
-                # Convert stored phase to tensor
-                phase_np = np.array(phase_data, dtype=np.float32)
-                print(f"[Reevaluate] Phase shape: {phase_np.shape}")
-
-                # Handle 1D case
-                is_1d = phase_np.ndim == 1 or (phase_np.ndim == 2 and min(phase_np.shape) == 1)
-                if is_1d:
-                    phase_np = phase_np.reshape(-1)
-
-                # Upsample phase
-                if upsample_factor > 1:
-                    if is_1d:
-                        phase_upsampled = np.repeat(phase_np, upsample_factor)
-                    else:
-                        phase_upsampled = np.repeat(np.repeat(phase_np, upsample_factor, axis=0), upsample_factor, axis=1)
-                else:
-                    phase_upsampled = phase_np
-                print(f"[Reevaluate] Upsampled phase shape: {phase_upsampled.shape}")
-
-                phase_tensor = torch.tensor(phase_upsampled, dtype=torch.float32, device=device)
-                if phase_tensor.ndim == 1:
-                    phase_tensor = phase_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(0)  # [1, 1, 1, W]
-                elif phase_tensor.ndim == 2:
-                    phase_tensor = phase_tensor.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
-                print(f"[Reevaluate] Phase tensor shape: {phase_tensor.shape}")
-
-                # Use propagator config built from DOE Settings (no wizard call)
-                print(f"[Reevaluate] Propagator config type: {propagator_config.prop_type}")
-
-                # Use PropagatorBuilder for more robust propagator creation
-                propagator_builder = PropagatorBuilder(
-                    propagator_config,
-                    device=device,
-                    dtype=torch.float32
-                )
-                propagator = propagator_builder.build()
-                print(f"[Reevaluate] Built propagator")
-
-                # Forward propagate
-                print(f"[Reevaluate] Starting propagation...")
-                with torch.no_grad():
-                    field = torch.exp(1j * phase_tensor.to(torch.complex64))
-                    print(f"[Reevaluate] Field shape: {field.shape}")
-                    output = propagator(field)
-                    print(f"[Reevaluate] Output shape: {output.shape}")
-                    simulated = output.abs() ** 2  # Intensity
-                print(f"[Reevaluate] Propagation complete")
-
-                # Get target pattern from stored DOE Settings (no wizard call)
-                target_pattern = request_data.get('target_pattern')
-                if target_pattern is not None:
-                    target_np_raw = np.array(target_pattern, dtype=np.float32)
-                    target = torch.from_numpy(target_np_raw).to(device)
-
-                    # Match dimensions if needed
-                    if target.shape[-2:] != simulated.shape[-2:]:
-                        target = torch.nn.functional.interpolate(
-                            target.float().unsqueeze(0) if target.ndim == 2 else target.float(),
-                            size=simulated.shape[-2:],
-                            mode='bilinear',
-                            align_corners=False
-                        )
-
-                    target_np = target.squeeze().cpu().numpy()
-                else:
-                    target_np = None
-
-                simulated_np = simulated.squeeze().cpu().numpy()
-
-                # Normalize
-                if simulated_np.max() > 0:
-                    simulated_np = simulated_np / simulated_np.max()
-
-                # Compute metrics using existing result metrics as fallback
-                metrics = result.get('metrics', {})
-
-                return {
-                    'simulated_intensity': simulated_np.tolist(),
-                    'target_intensity': target_np.tolist() if target_np is not None else result.get('target_intensity'),
-                    'phase': phase_upsampled.tolist(),
-                    'metrics': metrics,
-                    'upsample_factor': upsample_factor
-                }
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"Re-propagation failed: {e}, falling back to interpolation")
-
-        # Fall back to simple upsampling
-        return self._fallback_upsample(result, upsample_factor)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[Reevaluate] Unified reevaluation failed: {e}, falling back to interpolation")
+            # Fallback with effective_pixel_size
+            fallback = self._fallback_upsample(result, upsample_factor)
+            if fallback:
+                fallback['effective_pixel_size'] = pixel_size / upsample_factor
+            return fallback
 
     def _fallback_upsample(
         self,
         result: Dict[str, Any],
         upsample_factor: int
     ) -> Optional[Dict[str, Any]]:
-        """Fallback upsampling using interpolation when re-propagation fails."""
+        """Fallback upsampling using nearest-neighbor (kron-like) when re-propagation fails."""
         import numpy as np
         from scipy import ndimage
 
@@ -469,36 +415,35 @@ class TaskManager:
             sim_np = np.array(simulated, dtype=np.float32)
             is_1d = sim_np.ndim == 1 or (sim_np.ndim == 2 and min(sim_np.shape) == 1)
 
+            # Nearest-neighbor upsample (kron-like: each pixel → k×k block)
             if upsample_factor > 1:
                 if is_1d:
                     sim_np = sim_np.reshape(-1)
-                    upsampled_sim = ndimage.zoom(sim_np, upsample_factor, order=1)
+                    upsampled_sim = ndimage.zoom(sim_np, upsample_factor, order=0)
                 else:
-                    upsampled_sim = ndimage.zoom(sim_np, upsample_factor, order=1)
+                    upsampled_sim = ndimage.zoom(sim_np, upsample_factor, order=0)
             else:
                 upsampled_sim = sim_np
 
-            # Upsample target if available
+            # Upsample target if available (nearest-neighbor)
             upsampled_target = None
             if target is not None:
                 target_np = np.array(target)
                 if upsample_factor > 1:
                     if is_1d:
                         target_np = target_np.reshape(-1)
-                    upsampled_target = ndimage.zoom(target_np, upsample_factor, order=1)
+                    upsampled_target = ndimage.zoom(target_np, upsample_factor, order=0)
                 else:
                     upsampled_target = target_np
 
-            # Upsample phase if available
+            # Upsample phase if available (nearest-neighbor / kron-like)
             upsampled_phase = None
             if phase is not None:
                 phase_np = np.array(phase)
                 if upsample_factor > 1:
                     if is_1d:
                         phase_np = phase_np.reshape(-1)
-                        upsampled_phase = np.repeat(phase_np, upsample_factor)
-                    else:
-                        upsampled_phase = np.repeat(np.repeat(phase_np, upsample_factor, axis=0), upsample_factor, axis=1)
+                    upsampled_phase = ndimage.zoom(phase_np, upsample_factor, order=0)
                 else:
                     upsampled_phase = phase_np
 
