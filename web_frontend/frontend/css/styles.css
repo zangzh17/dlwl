@@ -383,6 +383,25 @@ body {
     margin-right: 0.25rem;
 }
 
+/* Device Info Bar */
+.device-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    font-size: 14px;
+}
+
+.device-info-bar #device-icon {
+    font-size: 1.2rem;
+}
+
+.device-info-bar #device-text {
+    font-weight: 500;
+}
+
 /* Progress Section */
 .progress-section {
     margin-bottom: 2rem;

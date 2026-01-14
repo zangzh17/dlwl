@@ -178,12 +178,15 @@ async def generate_preview(request: PreviewRequest) -> PreviewResponse:
                         physical_extent=(target_size_with_margin, target_size_with_margin)
                     )
                 else:
-                    # Angular coordinates (FFT)
+                    # Angular coordinates (FFT) - resample to uniform angle space (方案C)
                     fft_angular_span = request.wavelength / request.pixel_size
                     target_scatter = generate_target_heatmap(
                         target_np, "Target Pattern (Angular)",
                         coordinate_type='angle',
-                        angle_extent=(fft_angular_span, fft_angular_span)
+                        angle_extent=(fft_angular_span, fft_angular_span),
+                        wavelength=request.wavelength,
+                        pixel_size=request.pixel_size,
+                        resample_angle=True
                     )
 
                 # Intensity view with pixel coordinates
@@ -215,12 +218,15 @@ async def generate_preview(request: PreviewRequest) -> PreviewResponse:
                             coordinate_type='pixels'
                         )
                 else:
-                    # FFT mode - show angular coordinates
+                    # FFT mode - show angular coordinates with resampling (方案C)
                     fft_angular_span = request.wavelength / request.pixel_size
                     target_scatter = generate_target_heatmap(
                         target_np, "Target Pattern (Angular)",
                         coordinate_type='angle',
-                        angle_extent=(fft_angular_span, fft_angular_span)
+                        angle_extent=(fft_angular_span, fft_angular_span),
+                        wavelength=request.wavelength,
+                        pixel_size=request.pixel_size,
+                        resample_angle=True
                     )
                     target_heatmap = generate_target_heatmap(
                         target_np, "Target Intensity (Pixels)",

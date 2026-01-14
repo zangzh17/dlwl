@@ -314,14 +314,7 @@ class TaskManager:
         import numpy as np
 
         task = self.tasks.get(task_id)
-        if not task:
-            print(f"[Reevaluate] Task {task_id} not found")
-            return None
-        if task.status != TaskStatus.COMPLETED:
-            print(f"[Reevaluate] Task status is {task.status}, not COMPLETED")
-            return None
-        if not task.result:
-            print(f"[Reevaluate] Task result is empty")
+        if not task or task.status != TaskStatus.COMPLETED or not task.result:
             return None
 
         result = task.result.get('result', {})
@@ -330,7 +323,6 @@ class TaskManager:
         request_data = task.request_data or {}
 
         if not phase_data:
-            print(f"[Reevaluate] No phase data found in result")
             return None
 
         # Extract parameters from request_data
@@ -338,7 +330,33 @@ class TaskManager:
         pixel_size = request_data.get('pixel_size', 1e-6)  # Default 1um
         wavelength = request_data.get('wavelength', 532e-9)
         working_distance = request_data.get('working_distance')
-        target_size = request_data.get('target_size')
+
+        # target_span is the physical size in meters (stored as float, convert to tuple)
+        # IMPORTANT: Must include margin factor to match the original optimization!
+        # The optimization uses target_size_m = target_span * (1 + target_margin)
+        target_span = request_data.get('target_span')
+        advanced = request_data.get('advanced', {})
+        target_margin = advanced.get('target_margin', 0.1)  # Default 10% margin
+        margin_factor = 1.0 + target_margin
+
+        if target_span:
+            target_size_with_margin = target_span * margin_factor
+            target_size = (target_size_with_margin, target_size_with_margin)
+        else:
+            target_size = None
+
+        # Fallback for ASM/SFR: compute target_size from simulated_intensity if not stored
+        if propagation_type in ('asm', 'sfr') and target_size is None:
+            simulated_data = result.get('simulated_intensity')
+            if simulated_data:
+                # If target_size wasn't stored, compute from DOE size and margin
+                # This is a fallback - normally target_span should be provided
+                sim_np = np.array(simulated_data)
+                if working_distance:
+                    # Estimate target_size from typical scaling:
+                    # For ASM/SFR, use natural Fresnel scale as reasonable fallback
+                    natural_scale = wavelength * working_distance / pixel_size
+                    target_size = (natural_scale, natural_scale)
 
         # Convert to numpy arrays
         phase_np = np.array(phase_data, dtype=np.float32)
@@ -346,8 +364,6 @@ class TaskManager:
 
         # Extract target indices
         target_indices = extract_target_indices(target_np) if target_np is not None else []
-
-        print(f"[Reevaluate] Phase shape: {phase_np.shape}, propagation: {propagation_type}, pixel_size: {pixel_size*1e6:.2f}um")
 
         # If upsample_factor is 1, just return the original data with effective_pixel_size
         if upsample_factor <= 1:
@@ -374,12 +390,10 @@ class TaskManager:
                 target_indices=target_indices
             )
 
-            print(f"[Reevaluate] Result phase shape: {reeval_result.phase.shape}, effective_pixel: {reeval_result.effective_pixel_size*1e6:.3f}um")
-
             return {
                 'simulated_intensity': reeval_result.simulated_intensity.tolist(),
                 'target_intensity': reeval_result.target_intensity.tolist(),
-                'phase': reeval_result.phase.tolist(),  # Tiled/upsampled phase
+                'phase': reeval_result.phase.tolist(),
                 'metrics': reeval_result.metrics,
                 'upsample_factor': reeval_result.upsample_factor,
                 'effective_pixel_size': reeval_result.effective_pixel_size

@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOE Optimizer</title>
+
+    <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>DOE Optimizer</h1>
+            <nav class="nav-steps">
+                <button class="step-btn active" data-step="configure">1. Configure</button>
+                <button class="step-btn" data-step="optimize">2. Optimize</button>
+                <button class="step-btn" data-step="results">3. Results</button>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Configure Panel -->
+            <section id="configure-panel" class="panel active">
+                <div class="configure-layout-v3">
+                    <!-- Left Column: Physical Parameters + Wizard -->
+                    <div class="configure-column wizard-column">
+                        <!-- Physical Parameters (Part of DOE Settings, not Wizard) -->
+                        <div class="form-section physical-params-section">
+                            <h3>Physical Parameters <span class="settings-badge">DOE Settings</span></h3>
+                            <div class="form-grid compact">
+                                <label class="form-label">
+                                    Wavelength (nm)
+                                    <input type="number" id="wavelength" value="532" step="1" min="300" max="2000">
+                                </label>
+                                <label class="form-label">
+                                    Device Diameter (um)
+                                    <input type="number" id="device_diameter" value="256" step="1" min="10">
+                                </label>
+                                <label class="form-label">
+                                    Pixel Size (um)
+                                    <input type="number" id="pixel_size" value="1" step="0.1" min="0.1">
+                                </label>
+                                <label class="form-label">
+                                    Device Shape
+                                    <select id="device_shape">
+                                        <option value="square">Square</option>
+                                        <option value="circular">Circular</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Wizard (Optional) - for generating parameters -->
+                        <div class="panel-header collapsible-panel open" id="wizard-panel">
+                            <h2 class="panel-title" onclick="togglePanel('wizard-panel')">
+                                <span class="collapse-icon">-</span>
+                                Wizard (Optional)
+                            </h2>
+                            <div class="panel-body">
+                                <p class="panel-hint">Use the wizard to auto-generate DOE Settings parameters.</p>
+
+                                <!-- DOE Type -->
+                                <div class="form-section">
+                                    <h3>DOE Type</h3>
+                                    <div class="doe-type-selector compact">
+                                        <label class="radio-card">
+                                            <input type="radio" name="doe_type" value="splitter_2d" checked>
+                                            <span class="radio-card-content"><strong>2D Splitter</strong></span>
+                                        </label>
+                                        <label class="radio-card">
+                                            <input type="radio" name="doe_type" value="splitter_1d">
+                                            <span class="radio-card-content"><strong>1D Splitter</strong></span>
+                                        </label>
+                                        <label class="radio-card">
+                                            <input type="radio" name="doe_type" value="diffuser">
+                                            <span class="radio-card-content"><strong>Diffuser</strong></span>
+                                        </label>
+                                        <label class="radio-card">
+                                            <input type="radio" name="doe_type" value="lens">
+                                            <span class="radio-card-content"><strong>Lens</strong></span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <!-- Target Specification -->
+                                <div class="form-section" id="target-spec-section">
+                                    <h3>Target Specification</h3>
+                                    <div id="target-spec-form">
+                                        <!-- Filled dynamically by wizard.js -->
+                                    </div>
+                                </div>
+
+                                <button class="btn btn-primary btn-block" id="generate-params-btn">Generate Parameters</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Middle Column: DOE Settings -->
+                    <div class="configure-column settings-column">
+                        <h2>DOE Settings</h2>
+
+                        <!-- Propagation Configuration -->
+                        <div class="form-section">
+                            <h3>Propagation</h3>
+                            <div class="form-grid compact">
+                                <label class="form-label">
+                                    Type
+                                    <select id="param_prop_type">
+                                        <option value="fft">FFT (Far Field)</option>
+                                        <option value="asm">ASM (Near Field)</option>
+                                        <option value="sfr">SFR (Large Target)</option>
+                                        <option value="periodic_fresnel">Periodic + Fresnel (Strategy 2)</option>
+                                    </select>
+                                </label>
+                                <label class="form-label" id="working_distance_group" style="display:none;">
+                                    Working Distance (mm)
+                                    <input type="number" id="param_working_distance" value="" step="0.1" min="0">
+                                </label>
+                                <label class="form-label" id="target_span_group" style="display:none;">
+                                    Target Span (mm)
+                                    <input type="number" id="param_target_span" value="" step="0.1" min="0"
+                                           title="Physical size of target plane for ASM/SFR">
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- DOE Configuration -->
+                        <div class="form-section">
+                            <h3>DOE Configuration</h3>
+                            <div class="form-grid compact">
+                                <label class="form-label">
+                                    DOE Pixels [Y, X]
+                                    <input type="text" id="param_doe_pixels" value="[256, 256]" placeholder="[256, 256]">
+                                </label>
+                                <label class="form-label">
+                                    Simulation Pixels [Y, X]
+                                    <input type="text" id="param_sim_pixels" value="[21, 21]" placeholder="[21, 21]"
+                                           title="For FFT: period pixels; For ASM/SFR: target plane pixels">
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Target Pattern Status -->
+                        <div class="form-section">
+                            <h3>Target Pattern</h3>
+                            <div id="pattern-status" class="pattern-status" style="display: none;">
+                                <span class="status-icon">&#10003;</span>
+                                <span class="status-text">No pattern</span>
+                                <button class="btn btn-sm btn-link" id="clear-pattern-btn" style="display: none;">Clear</button>
+                            </div>
+                            <p class="hint" id="no-pattern-hint">Use Wizard or upload custom pattern.</p>
+                            <button class="btn btn-secondary btn-block" id="upload-pattern-btn">Upload Custom Pattern</button>
+                        </div>
+
+                        <!-- Advanced Settings -->
+                        <div class="form-section">
+                            <h3>Advanced Settings</h3>
+                            <div class="form-grid compact">
+                                <label class="form-label">
+                                    Max Resolution
+                                    <input type="number" id="adv_max_resolution" value="2000" step="100" min="100">
+                                </label>
+                                <label class="form-label" id="target_margin_group" style="display:none;">
+                                    Target Margin (%)
+                                    <input type="number" id="adv_target_margin" value="10" step="1" min="0" max="50"
+                                           title="Extra padding around target area (ASM/SFR only)">
+                                </label>
+                                <label class="form-label">
+                                    Progress Interval
+                                    <input type="number" id="adv_progress_interval" value="50" step="10" min="1">
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Optimization Settings -->
+                        <div class="form-section">
+                            <h3>Optimization Settings</h3>
+                            <div class="form-grid compact">
+                                <label class="form-label">
+                                    Method
+                                    <select id="opt_method">
+                                        <option value="SGD">SGD</option>
+                                        <option value="GS">GS</option>
+                                    </select>
+                                </label>
+                                <label class="form-label">
+                                    Learning Rate
+                                    <input type="text" id="opt_lr" value="3e-9">
+                                </label>
+                                <label class="form-label">
+                                    Iterations
+                                    <input type="number" id="opt_iters" value="1000" step="100" min="100">
+                                </label>
+                                <label class="form-label">
+                                    Loss Function
+                                    <select id="opt_loss_type">
+                                        <option value="L2">L2</option>
+                                        <option value="L1">L1</option>
+                                    </select>
+                                </label>
+                                <label class="form-label">
+                                    Sim Upsample
+                                    <input type="number" id="opt_sim_upsample" value="1" step="1" min="1" max="8">
+                                </label>
+                                <label class="form-label">
+                                    Pixel Multiplier
+                                    <input type="number" id="opt_pixel_multiplier" value="1" step="1" min="1" max="10">
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Warnings -->
+                        <div id="warnings-section" class="warnings-compact" style="display: none;">
+                            <h3>Warnings</h3>
+                            <div id="validation-warnings"></div>
+                        </div>
+
+                        <button class="btn btn-secondary btn-block" id="validate-params-btn">Validate & Update Preview</button>
+                    </div>
+
+                    <!-- Right Column: Reference Values + Preview -->
+                    <div class="configure-column preview-column-v3">
+                        <!-- Reference Values (Read-only) -->
+                        <div class="form-section reference-section">
+                            <h3>Reference Values <span class="readonly-badge">Read-only</span></h3>
+                            <div id="reference-values" class="reference-grid">
+                                <p class="hint">Generate parameters to see computed values</p>
+                            </div>
+                        </div>
+
+                        <!-- Preview Section -->
+                        <div class="preview-section">
+                            <h3>Geometry</h3>
+                            <div id="geometry-preview" class="preview-box">
+                                <p class="hint">Generate or validate parameters</p>
+                            </div>
+                        </div>
+
+                        <div class="preview-section">
+                            <h3>Target Pattern</h3>
+                            <div class="preview-toggle">
+                                <label class="toggle-option">
+                                    <input type="radio" name="target_view" value="scatter" checked>
+                                    <span>Orders</span>
+                                </label>
+                                <label class="toggle-option">
+                                    <input type="radio" name="target_view" value="heatmap">
+                                    <span>Intensity</span>
+                                </label>
+                            </div>
+                            <div id="target-preview" class="preview-box target-pattern">
+                                <p class="hint">Generate or validate parameters</p>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary btn-block" id="start-optimization-btn" disabled>Start Optimization</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Optimization Panel -->
+            <section id="optimize-panel" class="panel">
+                <h2>Optimization Progress</h2>
+
+                <div class="progress-section">
+                    <div class="progress-bar-container">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-text" id="progress-text">0 / 0 iterations (0%)</div>
+                    </div>
+
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Current Loss</div>
+                            <div class="stat-value" id="current-loss">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Best Loss</div>
+                            <div class="stat-value" id="best-loss">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">ETA</div>
+                            <div class="stat-value" id="eta">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Speed</div>
+                            <div class="stat-value" id="speed">--</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="loss-chart-section">
+                    <h3>Loss Curve</h3>
+                    <div id="loss-chart" class="chart-container"></div>
+                </div>
+
+                <div class="form-actions">
+                    <button class="btn btn-danger" id="cancel-optimization-btn">Cancel</button>
+                </div>
+            </section>
+
+            <!-- Results Panel -->
+            <section id="results-panel" class="panel">
+                <h2>Optimization Results</h2>
+
+                <!-- Metrics Summary -->
+                <div class="metrics-summary" id="metrics-summary">
+                    <!-- Filled dynamically -->
+                </div>
+
+                <!-- Charts Grid -->
+                <!-- Analysis Options (applies to all charts below) -->
+                <div class="analysis-options-global">
+                    <div class="upsample-options">
+                        <label class="form-label inline">
+                            <strong>Analysis Upsample:</strong>
+                            <select id="analysis-upsample">
+                                <option value="1">1x</option>
+                                <option value="2" selected>2x (Recommended)</option>
+                                <option value="3">3x</option>
+                                <option value="4">4x</option>
+                            </select>
+                        </label>
+                        <span class="sim-pixels-info" id="analysis-sim-pixels"></span>
+                    </div>
+                </div>
+
+                <div class="results-grid">
+                    <div class="result-card">
+                        <h3>Phase Distribution</h3>
+                        <div class="chart-options">
+                            <label class="toggle-option">
+                                <input type="radio" name="phase_view" value="full" checked>
+                                <span>Full Device</span>
+                            </label>
+                            <label class="toggle-option" id="single-period-option" style="display: none;">
+                                <input type="radio" name="phase_view" value="period">
+                                <span>Single Period</span>
+                            </label>
+                        </div>
+                        <div id="phase-chart" class="chart-container"></div>
+                    </div>
+                    <div class="result-card">
+                        <h3>Target vs Simulated</h3>
+                        <div class="chart-options">
+                            <div class="comparison-toggle">
+                                <label class="toggle-option">
+                                    <input type="radio" name="intensity_view" value="target" checked>
+                                    <span>Target</span>
+                                </label>
+                                <label class="toggle-option">
+                                    <input type="radio" name="intensity_view" value="simulated">
+                                    <span>Simulated</span>
+                                </label>
+                                <label class="toggle-option">
+                                    <input type="radio" name="intensity_view" value="comparison">
+                                    <span>Side by Side</span>
+                                </label>
+                            </div>
+                            <label class="checkbox-inline">
+                                <input type="checkbox" id="intensity-log-scale">
+                                <span>Log Scale</span>
+                            </label>
+                        </div>
+                        <div id="intensity-chart" class="chart-container"></div>
+                    </div>
+                </div>
+
+                <!-- Additional Analysis -->
+                <div class="optional-charts">
+                    <h3>Additional Analysis</h3>
+                    <div class="analysis-options">
+                        <div class="chart-toggles">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="show-efficiency-chart" checked>
+                                <span>Order Efficiency</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="show-order-positions" checked>
+                                <span>Order Positions</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="show-loss-history">
+                                <span>Loss History</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="analysis-charts-grid">
+                        <div id="efficiency-chart" class="chart-container"></div>
+                        <div id="order-positions-chart" class="chart-container"></div>
+                    </div>
+                    <div id="loss-history-chart" class="chart-container" style="display: none;"></div>
+                </div>
+
+                <!-- Export Actions -->
+                <div class="export-section">
+                    <h3>Export</h3>
+                    <div class="export-buttons">
+                        <button class="btn btn-secondary" id="export-phase-csv">Phase (CSV)</button>
+                        <button class="btn btn-secondary" id="export-phase-npy">Phase (NPY)</button>
+                        <button class="btn btn-secondary" id="export-height-csv">Height (CSV)</button>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="new-optimization-btn">New Optimization</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>DOE Optimizer v3.0 | <a href="/docs" target="_blank">API Docs</a></p>
+        </footer>
+    </div>
+
+    <!-- Pattern Upload Modal -->
+    <div id="pattern-upload-modal" class="modal" style="display: none;">
+        <div class="modal-overlay" onclick="PatternUpload.close()"></div>
+        <div class="modal-content pattern-modal-compact">
+            <div class="modal-header">
+                <h2>Upload Pattern</h2>
+                <button class="modal-close" onclick="PatternUpload.close()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="upload-compact-layout">
+                    <!-- Left: Controls -->
+                    <div class="upload-controls-compact">
+                        <!-- File Upload -->
+                        <div class="upload-row">
+                            <input type="file" id="pattern-file-input" accept="image/*" style="display: none;">
+                            <button class="btn btn-primary btn-sm" onclick="document.getElementById('pattern-file-input').click()">
+                                Select Image
+                            </button>
+                            <span id="pattern-filename" class="filename-display"></span>
+                            <span id="original-size" class="size-info"></span>
+                        </div>
+
+                        <!-- Scaling Options -->
+                        <div class="processing-step">
+                            <label class="step-label">Scale</label>
+                            <div class="scale-options">
+                                <select id="pattern-scale-mode" class="scale-select">
+                                    <option value="none">No scaling</option>
+                                    <option value="ratio">By ratio</option>
+                                    <option value="width">By width (px)</option>
+                                </select>
+                                <input type="number" id="pattern-scale-value" value="1.0" step="0.1" min="0.1" class="scale-input" style="display:none;">
+                            </div>
+                        </div>
+
+                        <!-- Target Info -->
+                        <div class="processing-step">
+                            <label class="step-label">Fit to target</label>
+                            <span class="target-info">Target: <strong id="target-pixels">--</strong> (crop/pad + norm)</span>
+                        </div>
+                    </div>
+
+                    <!-- Right: Preview -->
+                    <div class="upload-preview-compact">
+                        <div id="processed-preview" class="preview-plot-compact">
+                            <p class="placeholder-text">Select an image</p>
+                        </div>
+                        <div class="pattern-stats-compact">
+                            <span>Size: <span id="final-size">--</span></span>
+                            <span>Range: <span id="value-range">--</span></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer compact">
+                <button class="btn btn-secondary btn-sm" onclick="PatternUpload.close()">Cancel</button>
+                <button class="btn btn-primary btn-sm" id="apply-pattern-btn" disabled onclick="PatternUpload.apply()">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Panel Toggle Script -->
+    <script>
+        function togglePanel(panelId) {
+            const panel = document.getElementById(panelId);
+            panel.classList.toggle('open');
+            const icon = panel.querySelector('.collapse-icon');
+            icon.textContent = panel.classList.contains('open') ? '-' : '+';
+        }
+    </script>
+
+    <!-- JavaScript Modules (v4.1 cache bust) -->
+    <script src="/js/state.js?v=4.4"></script>
+    <script src="/js/wizard.js?v=4.4"></script>
+    <script src="/js/params.js?v=4.4"></script>
+    <script src="/js/preview.js?v=4.4"></script>
+    <script src="/js/optimizer.js?v=4.4"></script>
+    <script src="/js/results.js?v=4.4"></script>
+    <script src="/js/pattern-upload.js?v=4.4"></script>
+    <script src="/js/app.js?v=4.4"></script>
+</body>
+</html>

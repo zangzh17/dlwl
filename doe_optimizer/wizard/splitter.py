@@ -597,15 +597,13 @@ class SplitterWizard(BaseWizard):
         # Apply margin factor to avoid edge truncation
         target_size_with_margin = target_size * self.target_margin_factor
 
-        target_pixels = int(target_size_with_margin / physical.pixel_size)
-        # Ensure at least as large as DOE
-        target_pixels = max(target_pixels, device_pixels)
-
+        # Pass target_size (physical size in meters) to ASMParams
+        # ASMParams will compute target_pixels and target_resolution automatically
         return ASMParams(
             doe_pixels=(device_pixels, device_pixels),
             physical=physical,
             working_distances=[working_distance],
-            target_pixels=(target_pixels, target_pixels),
+            target_size=(target_size_with_margin, target_size_with_margin),
             upsample_factor=1,
             aperture_type='square'
         )

@@ -37,7 +37,7 @@ const PreviewUI = {
         this.renderGeometry();
         // Render based on currently selected view
         const selectedView = document.querySelector('input[name="target_view"]:checked');
-        const viewType = selectedView ? selectedView.value : 'scatter';
+        const viewType = selectedView ? selectedView.value : 'physical';
         this.renderTargetPreview(viewType);
     },
 
@@ -57,7 +57,7 @@ const PreviewUI = {
 
     /**
      * Render target pattern preview
-     * @param {string} viewType - 'scatter' or 'heatmap'
+     * @param {string} viewType - 'physical' or 'pixel'
      */
     renderTargetPreview(viewType) {
         const container = document.getElementById('target-preview');
@@ -70,8 +70,12 @@ const PreviewUI = {
         const containerWidth = container.clientWidth || 380;
         const chartHeight = 200;
 
-        if (viewType === 'scatter' && AppState.targetScatter) {
-            // Create a div for Plotly with explicit height
+        // Select data based on view type
+        // 'physical' = targetScatter (physical/angle coordinates with proper mapping)
+        // 'pixel' = targetHeatmap (pixel indices)
+        const plotData = viewType === 'physical' ? AppState.targetScatter : AppState.targetHeatmap;
+
+        if (plotData) {
             const plotDiv = document.createElement('div');
             plotDiv.style.width = '100%';
             plotDiv.style.height = chartHeight + 'px';
@@ -79,29 +83,9 @@ const PreviewUI = {
 
             Plotly.newPlot(
                 plotDiv,
-                AppState.targetScatter.data,
+                plotData.data,
                 {
-                    ...AppState.targetScatter.layout,
-                    width: containerWidth,
-                    height: chartHeight,
-                    autosize: false,
-                    margin: { t: 30, r: 10, b: 40, l: 50 },
-                    paper_bgcolor: 'transparent',
-                    plot_bgcolor: 'transparent'
-                },
-                { responsive: true, displayModeBar: false }
-            );
-        } else if (viewType === 'heatmap' && AppState.targetHeatmap) {
-            const plotDiv = document.createElement('div');
-            plotDiv.style.width = '100%';
-            plotDiv.style.height = chartHeight + 'px';
-            container.appendChild(plotDiv);
-
-            Plotly.newPlot(
-                plotDiv,
-                AppState.targetHeatmap.data,
-                {
-                    ...AppState.targetHeatmap.layout,
+                    ...plotData.layout,
                     width: containerWidth,
                     height: chartHeight,
                     autosize: false,
@@ -112,11 +96,11 @@ const PreviewUI = {
                 { responsive: true, displayModeBar: false }
             );
         } else if (AppState.targetScatter) {
-            // Default to scatter if available
-            this.renderTargetPreview('scatter');
+            // Fall back to physical view
+            this.renderTargetPreview('physical');
         } else if (AppState.targetHeatmap) {
-            // Fall back to heatmap
-            this.renderTargetPreview('heatmap');
+            // Fall back to pixel view
+            this.renderTargetPreview('pixel');
         } else {
             container.innerHTML = '<p class="hint">Generate parameters to see preview</p>';
         }

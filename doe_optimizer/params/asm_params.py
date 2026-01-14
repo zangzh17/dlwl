@@ -7,7 +7,7 @@ ASMParams is used for:
 - Non-periodic DOE optimization
 
 The Angular Spectrum Method (ASM) provides exact diffraction calculation
-when the output and input planes have similar physical sizes.
+for finite distance propagation with configurable output size.
 """
 
 from dataclasses import dataclass, field
@@ -20,38 +20,42 @@ from .base import PhysicalConstants, PropagatorConfig, PropagationType
 
 @dataclass
 class ASMParams:
-    """Type C: Small target face finite distance parameters.
+    """Type C: Finite distance parameters with configurable output size.
 
-    For DOEs where the target plane is similar in size to the DOE,
-    suitable for direct ASM propagation.
+    For DOEs with finite propagation distance. Similar interface to SFRParams
+    with output_size and output_resolution for flexibility.
 
     Attributes:
         doe_pixels: DOE size (H, W) in pixels
         physical: Physical constants
         working_distances: Propagation distance(s) in meters
-        target_pixels: Target plane size (H, W) in pixels
-                      Larger than doe_pixels uses zero-padding
+        target_size: Physical target size (H, W) in meters. If None, uses DOE size.
+        target_resolution: Target resolution (H, W) in pixels. If None, derived from target_size.
         upsample_factor: Upsampling factor for simulation
         aperture_type: Device aperture shape
         use_linear_conv: Use linear convolution (default True for accuracy)
 
     Example:
-        # Strategy 1 finite-distance splitter
+        # Finite-distance splitter with 1mm target on 256um DOE
         params = ASMParams(
-            doe_pixels=(1000, 1000),
-            physical=PhysicalConstants(wavelength=532e-9),
-            working_distances=[0.05],  # 5cm
-            target_pixels=(1200, 1200),  # Slight padding
-            upsample_factor=2
+            doe_pixels=(256, 256),
+            physical=PhysicalConstants(wavelength=532e-9, pixel_size=1e-6),
+            working_distances=[0.01],  # 10mm
+            target_size=(0.001, 0.001),  # 1mm x 1mm target
+            target_resolution=(256, 256),  # 256x256 output pixels
         )
     """
     doe_pixels: Tuple[int, int]
     physical: PhysicalConstants
     working_distances: List[float]
-    target_pixels: Tuple[int, int]
+    target_size: Optional[Tuple[float, float]] = None  # Physical size in meters
+    target_resolution: Optional[Tuple[int, int]] = None  # Output pixel count
     upsample_factor: int = 1
     aperture_type: str = 'square'
     use_linear_conv: bool = True
+
+    # Legacy compatibility: target_pixels (will be computed from target_size)
+    target_pixels: Optional[Tuple[int, int]] = field(default=None, repr=False)
 
     # Target pattern (set by wizard)
     _target_pattern: Optional[torch.Tensor] = field(default=None, repr=False)
@@ -65,13 +69,24 @@ class ASMParams:
         if not self.working_distances or any(d <= 0 for d in self.working_distances):
             raise ValueError("working_distances must be positive")
 
-        th, tw = self.target_pixels
-        if th <= 0 or tw <= 0:
-            raise ValueError("target_pixels must be positive")
+        # If target_size not specified, default to DOE size
+        if self.target_size is None:
+            self.target_size = self.doe_size
 
-        # Target should be at least as large as DOE for linear convolution
-        if self.use_linear_conv and (th < h or tw < w):
-            raise ValueError("target_pixels must be >= doe_pixels for linear convolution")
+        # If target_resolution not specified, derive from target_size
+        if self.target_resolution is None:
+            ps = self.physical.pixel_size
+            self.target_resolution = (
+                int(np.ceil(self.target_size[0] / ps)),
+                int(np.ceil(self.target_size[1] / ps))
+            )
+
+        # Compute target_pixels for legacy compatibility (internal simulation pixels)
+        # This is the pixel count at DOE's pixel_size for the simulation area
+        ps = self.physical.pixel_size
+        sim_h = max(int(np.ceil(self.target_size[0] / ps)), h)
+        sim_w = max(int(np.ceil(self.target_size[1] / ps)), w)
+        self.target_pixels = (sim_h, sim_w)
 
         # Convert to numpy array
         self._working_distances_arr = np.array(self.working_distances)
@@ -81,13 +96,6 @@ class ASMParams:
         """Physical DOE size in meters."""
         h, w = self.doe_pixels
         ps = self.physical.pixel_size
-        return (h * ps, w * ps)
-
-    @property
-    def target_size(self) -> Tuple[float, float]:
-        """Physical target size in meters."""
-        h, w = self.target_pixels
-        ps = self.physical.pixel_size  # Same pixel size for ASM
         return (h * ps, w * ps)
 
     @property
@@ -104,8 +112,8 @@ class ASMParams:
 
     @property
     def output_pixels(self) -> Tuple[int, int]:
-        """Output resolution (target pixels with upsampling)."""
-        h, w = self.target_pixels
+        """Output resolution (target_resolution with upsampling)."""
+        h, w = self.target_resolution
         return (h * self.upsample_factor, w * self.upsample_factor)
 
     @property
@@ -126,7 +134,7 @@ class ASMParams:
         Args:
             pattern: Target amplitude [1, C, H, W]
                      C = num_channels
-                     H, W should match target_pixels * upsample_factor
+                     H, W should match target_resolution * upsample_factor
         """
         self._target_pattern = pattern
 
@@ -136,12 +144,21 @@ class ASMParams:
         return self._target_pattern
 
     def to_propagator_config(self) -> PropagatorConfig:
-        """Create PropagatorConfig for this parameter set."""
+        """Create PropagatorConfig for this parameter set.
+
+        Includes output_size for ASM to support arbitrary target sizes.
+        """
+        # Apply upsample_factor to target_size
+        target_size_upsampled = (
+            self.target_size[0],  # Physical size doesn't change with upsample
+            self.target_size[1]
+        )
         return PropagatorConfig(
             prop_type=PropagationType.ASM,
             feature_size=self.feature_size,
             wavelength=self.physical.wavelength,
             working_distance=self._working_distances_arr,
+            output_size=target_size_upsampled,  # NEW: physical output size
             output_resolution=self.output_pixels,
             num_channels=self.num_channels,
             precompute_kernels=True,
@@ -156,7 +173,8 @@ class ASMParams:
             'refraction_index': self.physical.refraction_index,
             'pixel_size': self.physical.pixel_size,
             'working_distances': self.working_distances,
-            'target_pixels': self.target_pixels,
+            'target_size': self.target_size,  # NEW: physical size
+            'target_resolution': self.target_resolution,  # NEW: output resolution
             'upsample_factor': self.upsample_factor,
             'aperture_type': self.aperture_type,
             'use_linear_conv': self.use_linear_conv,
@@ -170,11 +188,22 @@ class ASMParams:
             refraction_index=data.get('refraction_index', 1.62),
             pixel_size=data.get('pixel_size', 0.5e-6),
         )
+        # Support both old (target_pixels) and new (target_size/target_resolution) format
+        target_size = data.get('target_size')
+        target_resolution = data.get('target_resolution')
+
+        # Legacy: if target_pixels provided but not target_size, compute from pixels
+        if target_size is None and 'target_pixels' in data:
+            tp = data['target_pixels']
+            target_size = (tp[0] * physical.pixel_size, tp[1] * physical.pixel_size)
+            target_resolution = tuple(tp)
+
         return cls(
             doe_pixels=tuple(data['doe_pixels']),
             physical=physical,
             working_distances=data['working_distances'],
-            target_pixels=tuple(data['target_pixels']),
+            target_size=tuple(target_size) if target_size else None,
+            target_resolution=tuple(target_resolution) if target_resolution else None,
             upsample_factor=data.get('upsample_factor', 1),
             aperture_type=data.get('aperture_type', 'square'),
             use_linear_conv=data.get('use_linear_conv', True),

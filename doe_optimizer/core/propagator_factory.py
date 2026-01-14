@@ -85,17 +85,18 @@ class PropagatorBuilder:
         return propagator
 
     def _build_asm_propagator(self) -> Callable:
-        """Build ASM propagator for near-field propagation."""
+        """Build ASM propagator for near-field propagation with configurable output size."""
         feature_size = self.config.feature_size
         wavelength = self.config.wavelength_array
         prop_dist = self.config.working_distance_array
+        output_size = self.config.output_size  # NEW: physical output size
         output_resolution = self.config.output_resolution
 
         def propagator(
             field: torch.Tensor,
             precomputed_H: torch.Tensor = None
         ) -> torch.Tensor:
-            """ASM propagation.
+            """ASM propagation with configurable output size.
 
             Args:
                 field: Input complex field [B, 1, H, W]
@@ -109,6 +110,7 @@ class PropagatorBuilder:
                 feature_size=feature_size,
                 wavelength=wavelength,
                 z=prop_dist,
+                output_size=output_size,  # NEW: pass output_size
                 output_resolution=output_resolution,
                 precomputed_H=precomputed_H,
                 dtype=self.dtype

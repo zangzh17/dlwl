@@ -409,12 +409,81 @@ def generate_target_scatter(
     }
 
 
+def resample_to_uniform_angle(
+    data: np.ndarray,
+    wavelength: float,
+    pixel_size: float,
+    max_angle: Optional[float] = None
+) -> Tuple[np.ndarray, float]:
+    """Resample FFT output from sin(θ) space to uniform θ space.
+
+    In FFT output, pixel index m corresponds to sin(θ) = m * λ / (N * p),
+    which means θ = arcsin(m * λ / (N * p)). This is non-linear.
+
+    This function resamples the data to a uniform angle grid.
+
+    Args:
+        data: 2D array in FFT pixel space (uniform in sin(θ))
+        wavelength: Wavelength in meters
+        pixel_size: DOE pixel size in meters
+        max_angle: Maximum angle in radians (auto-computed if None)
+
+    Returns:
+        (resampled_data, actual_max_angle) where resampled_data is uniform in θ
+    """
+    from scipy import ndimage
+
+    h, w = data.shape
+
+    # Compute max sin(θ) that FFT can represent
+    # For FFT, the range is [-N/2, N/2) * λ/(N*p) = [-λ/(2p), λ/(2p)]
+    max_sin_theta = wavelength / (2 * pixel_size)
+
+    # Clamp to valid range for arcsin
+    max_sin_theta = min(max_sin_theta, 0.999)
+
+    # Compute actual max angle
+    actual_max_angle = np.arcsin(max_sin_theta)
+    if max_angle is not None:
+        actual_max_angle = min(actual_max_angle, max_angle)
+
+    # Create uniform angle grid
+    theta_y = np.linspace(-actual_max_angle, actual_max_angle, h)
+    theta_x = np.linspace(-actual_max_angle, actual_max_angle, w)
+
+    # For each target angle, find the corresponding pixel position in original data
+    # Original: pixel m corresponds to sin(θ) = (m - N/2) * λ / (N * p)
+    # So: m = sin(θ) * N * p / λ + N/2
+
+    # Map uniform angle to pixel coordinates
+    def angle_to_pixel(theta, n, wl, ps):
+        sin_theta = np.sin(theta)
+        # Pixel coordinate (0 to n-1, centered at n/2)
+        m = sin_theta * n * ps / wl + n / 2
+        return m
+
+    # Create coordinate arrays for interpolation
+    y_coords = angle_to_pixel(theta_y, h, wavelength, pixel_size)
+    x_coords = angle_to_pixel(theta_x, w, wavelength, pixel_size)
+
+    # Create 2D coordinate grid
+    yy, xx = np.meshgrid(y_coords, x_coords, indexing='ij')
+
+    # Resample using map_coordinates (order=1 for linear interpolation)
+    resampled = ndimage.map_coordinates(data, [yy, xx], order=1, mode='constant', cval=0)
+
+    return resampled, actual_max_angle
+
+
 def generate_target_heatmap(
     target_pattern: np.ndarray,
     title: str = 'Target Pattern',
     coordinate_type: str = 'pixels',
     physical_extent: Optional[Tuple[float, float]] = None,
-    angle_extent: Optional[Tuple[float, float]] = None
+    angle_extent: Optional[Tuple[float, float]] = None,
+    wavelength: Optional[float] = None,
+    pixel_size: Optional[float] = None,
+    resample_angle: bool = False
 ) -> Dict[str, Any]:
     """Generate heatmap data for target pattern.
 
@@ -424,6 +493,9 @@ def generate_target_heatmap(
         coordinate_type: 'pixels', 'physical', or 'angle'
         physical_extent: (y_size_m, x_size_m) for physical coordinates
         angle_extent: (y_angle_rad, x_angle_rad) for angle coordinates
+        wavelength: Wavelength in meters (required for angle resampling)
+        pixel_size: Pixel size in meters (required for angle resampling)
+        resample_angle: If True and coordinate_type='angle', resample to uniform angle space
 
     Returns:
         Plotly-compatible heatmap data
@@ -441,12 +513,25 @@ def generate_target_heatmap(
     if max_val > 0:
         target_pattern = target_pattern / max_val
 
+    # Resample to uniform angle space if requested (方案C)
+    actual_angle_extent = angle_extent
+    if resample_angle and coordinate_type == 'angle' and wavelength and pixel_size:
+        max_angle = angle_extent[0] if angle_extent else None
+        target_pattern, actual_max_angle = resample_to_uniform_angle(
+            target_pattern, wavelength, pixel_size, max_angle
+        )
+        actual_angle_extent = (actual_max_angle, actual_max_angle)
+        # Re-normalize after resampling
+        max_val = target_pattern.max()
+        if max_val > 0:
+            target_pattern = target_pattern / max_val
+
     z = target_pattern.tolist()
     h, w = target_pattern.shape
 
     # Set coordinate axes based on type
     if coordinate_type == 'physical' and physical_extent:
-        # Physical coordinates (mm)
+        # Physical coordinates (mm) - linear mapping
         y_size_mm = physical_extent[0] * 1e3
         x_size_mm = physical_extent[1] * 1e3
         x_axis = {
@@ -462,21 +547,21 @@ def generate_target_heatmap(
                         f'{y_size_mm/4:.2f}', f'{y_size_mm/2:.2f}'],
             'scaleanchor': 'x'
         }
-    elif coordinate_type == 'angle' and angle_extent:
-        # Angle coordinates (degrees)
-        y_angle_deg = math.degrees(angle_extent[0])
-        x_angle_deg = math.degrees(angle_extent[1])
+    elif coordinate_type == 'angle' and actual_angle_extent:
+        # Angle coordinates (degrees) - now linear after resampling
+        y_angle_deg = math.degrees(actual_angle_extent[0])
+        x_angle_deg = math.degrees(actual_angle_extent[1])
         x_axis = {
-            'title': 'Angle X (deg)',
+            'title': 'X (deg)',
             'tickvals': [0, w//4, w//2, 3*w//4, w-1],
-            'ticktext': [f'{-x_angle_deg/2:.2f}', f'{-x_angle_deg/4:.2f}', '0',
-                        f'{x_angle_deg/4:.2f}', f'{x_angle_deg/2:.2f}']
+            'ticktext': [f'{-x_angle_deg:.2f}', f'{-x_angle_deg/2:.2f}', '0',
+                        f'{x_angle_deg/2:.2f}', f'{x_angle_deg:.2f}']
         }
         y_axis = {
-            'title': 'Angle Y (deg)',
+            'title': 'Y (deg)',
             'tickvals': [0, h//4, h//2, 3*h//4, h-1],
-            'ticktext': [f'{-y_angle_deg/2:.2f}', f'{-y_angle_deg/4:.2f}', '0',
-                        f'{y_angle_deg/4:.2f}', f'{y_angle_deg/2:.2f}'],
+            'ticktext': [f'{-y_angle_deg:.2f}', f'{-y_angle_deg/2:.2f}', '0',
+                        f'{y_angle_deg/2:.2f}', f'{y_angle_deg:.2f}'],
             'scaleanchor': 'x'
         }
     else:

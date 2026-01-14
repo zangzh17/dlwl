@@ -6,6 +6,7 @@ const ResultsUI = {
     // Current view settings
     currentPhaseView: 'full',
     currentIntensityView: 'target',
+    currentIntensityCoord: 'pixel',  // 'pixel' or 'physical'
     useLogScale: false,
     analysisUpsample: 2,
     phaseUnit: 'um',  // 'um' or 'pixel'
@@ -63,6 +64,14 @@ const ResultsUI = {
         document.querySelectorAll('input[name="intensity_view"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 this.currentIntensityView = e.target.value;
+                this.renderIntensityChart();
+            });
+        });
+
+        // Intensity coordinate toggle (pixel vs physical)
+        document.querySelectorAll('input[name="intensity_coord"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                this.currentIntensityCoord = e.target.value;
                 this.renderIntensityChart();
             });
         });
@@ -489,6 +498,88 @@ const ResultsUI = {
     },
 
     /**
+     * Get coordinate axis configuration based on mode
+     * @returns {Object} { xTitle, yTitle, xTickvals, xTicktext, yTickvals, yTicktext }
+     */
+    getIntensityAxisConfig(dataShape) {
+        const h = dataShape[0];
+        const w = dataShape[1];
+        const propType = AppState.structuredParams?.propagation_type || 'fft';
+        const usePhysical = this.currentIntensityCoord === 'physical';
+
+        if (!usePhysical) {
+            // Pixel coordinates (default)
+            return {
+                xTitle: 'X (pixels)',
+                yTitle: 'Y (pixels)',
+                xTickvals: null,
+                xTicktext: null,
+                yTickvals: null,
+                yTicktext: null
+            };
+        }
+
+        // Physical coordinates
+        if (propType === 'fft' || propType === 'periodic_fresnel') {
+            // FFT/periodic_fresnel: angle coordinates (degrees)
+            const wavelength = AppState.wizardInput?.wavelength || 532e-9;
+            const pixelSize = AppState.wizardInput?.pixel_size || 1e-6;
+
+            // Maximum sin(theta) = lambda / (2 * pixel_size)
+            let maxSinTheta = wavelength / (2 * pixelSize);
+            maxSinTheta = Math.min(maxSinTheta, 0.999);  // Clamp for valid arcsin
+            const maxAngleRad = Math.asin(maxSinTheta);
+            const maxAngleDeg = maxAngleRad * 180 / Math.PI;
+
+            // Create tick labels (5 ticks)
+            const tickPositions = [0, Math.floor(w/4), Math.floor(w/2), Math.floor(3*w/4), w-1];
+            const xTickText = tickPositions.map((p, i) => {
+                const frac = (p - w/2) / (w/2);  // -1 to 1
+                return (frac * maxAngleDeg).toFixed(2);
+            });
+            const yTickText = tickPositions.map((p, i) => {
+                const frac = (p - h/2) / (h/2);  // -1 to 1
+                return (frac * maxAngleDeg).toFixed(2);
+            });
+
+            return {
+                xTitle: 'X (deg)',
+                yTitle: 'Y (deg)',
+                xTickvals: tickPositions,
+                xTicktext: xTickText,
+                yTickvals: tickPositions.map(p => Math.floor(p * h / w)),  // Scale for y
+                yTicktext: yTickText
+            };
+        } else {
+            // ASM/SFR: physical size (mm)
+            const targetSpan = AppState.structuredParams?.target_span?.[0] || 1e-3;  // in meters
+            const targetMargin = AppState.structuredParams?.target_margin || 0.1;
+            const physicalSize = targetSpan * (1 + targetMargin);
+            const halfSizeMm = physicalSize * 1000 / 2;
+
+            // Create tick labels (5 ticks)
+            const tickPositions = [0, Math.floor(w/4), Math.floor(w/2), Math.floor(3*w/4), w-1];
+            const xTickText = tickPositions.map((p, i) => {
+                const frac = (p - w/2) / (w/2);  // -1 to 1
+                return (frac * halfSizeMm).toFixed(2);
+            });
+            const yTickText = tickPositions.map((p, i) => {
+                const frac = (p - h/2) / (h/2);  // -1 to 1
+                return (frac * halfSizeMm).toFixed(2);
+            });
+
+            return {
+                xTitle: 'X (mm)',
+                yTitle: 'Y (mm)',
+                xTickvals: tickPositions,
+                xTicktext: xTickText,
+                yTickvals: tickPositions.map(p => Math.floor(p * h / w)),  // Scale for y
+                yTicktext: yTickText
+            };
+        }
+    },
+
+    /**
      * Render intensity chart
      */
     renderIntensityChart() {
@@ -532,6 +623,8 @@ const ResultsUI = {
             }
 
             const processedData = applyLog(data);
+            const dataShape = [data.length, data[0].length];
+            const axisConfig = this.getIntensityAxisConfig(dataShape);
 
             const trace = {
                 z: processedData,
@@ -541,10 +634,23 @@ const ResultsUI = {
                 colorbar: { title: useLog ? 'log10(Intensity)' : 'Intensity' }
             };
 
+            const xaxis = { title: axisConfig.xTitle };
+            const yaxis = { title: axisConfig.yTitle, scaleanchor: 'x' };
+
+            // Add custom tick labels for physical coordinates
+            if (axisConfig.xTickvals) {
+                xaxis.tickvals = axisConfig.xTickvals;
+                xaxis.ticktext = axisConfig.xTicktext;
+            }
+            if (axisConfig.yTickvals) {
+                yaxis.tickvals = axisConfig.yTickvals;
+                yaxis.ticktext = axisConfig.yTicktext;
+            }
+
             Plotly.newPlot(container, [trace], {
                 title: viewType === 'target' ? 'Target Intensity' : 'Simulated Intensity',
-                xaxis: { title: 'X (pixels)' },
-                yaxis: { title: 'Y (pixels)', scaleanchor: 'x' },
+                xaxis: xaxis,
+                yaxis: yaxis,
                 margin: { t: 40, r: 20, b: 50, l: 60 }
             }, { responsive: true });
         }
@@ -630,6 +736,16 @@ const ResultsUI = {
             return data.map(row => row.map(v => v > 0 ? Math.log10(v + 1e-10) : -10));
         };
 
+        // Get axis configuration for physical coordinates
+        let axisConfig = null;
+        if (result.target_intensity) {
+            const dataShape = [result.target_intensity.length, result.target_intensity[0].length];
+            axisConfig = this.getIntensityAxisConfig(dataShape);
+        } else if (result.simulated_intensity) {
+            const dataShape = [result.simulated_intensity.length, result.simulated_intensity[0].length];
+            axisConfig = this.getIntensityAxisConfig(dataShape);
+        }
+
         if (result.target_intensity) {
             traces.push({
                 z: applyLog(result.target_intensity),
@@ -653,13 +769,35 @@ const ResultsUI = {
             });
         }
 
-        Plotly.newPlot(container, traces, {
+        // Build axis config with physical coordinates if enabled
+        const layout = {
             title: 'Target vs Simulated',
             grid: { rows: 1, columns: 2, pattern: 'independent' },
             xaxis: { title: 'Target' },
             xaxis2: { title: 'Simulated' },
             margin: { t: 40, r: 80, b: 50, l: 60 }
-        }, { responsive: true });
+        };
+
+        // Add axis labels for physical coordinates
+        if (axisConfig && axisConfig.xTickvals) {
+            layout.xaxis.tickvals = axisConfig.xTickvals;
+            layout.xaxis.ticktext = axisConfig.xTicktext;
+            layout.xaxis2.tickvals = axisConfig.xTickvals;
+            layout.xaxis2.ticktext = axisConfig.xTicktext;
+            layout.yaxis = {
+                tickvals: axisConfig.yTickvals,
+                ticktext: axisConfig.yTicktext
+            };
+            layout.yaxis2 = {
+                tickvals: axisConfig.yTickvals,
+                ticktext: axisConfig.yTicktext
+            };
+            // Update titles to show unit
+            layout.xaxis.title = `Target (${axisConfig.xTitle.match(/\(([^)]+)\)/)?.[1] || 'pixels'})`;
+            layout.xaxis2.title = `Simulated (${axisConfig.xTitle.match(/\(([^)]+)\)/)?.[1] || 'pixels'})`;
+        }
+
+        Plotly.newPlot(container, traces, layout, { responsive: true });
     },
 
     /**
@@ -955,6 +1093,14 @@ const ResultsUI = {
             clearTimeout(timeoutId);
 
             const data = await response.json();
+
+            // Debug: log what we got from the API
+            console.log('[Reevaluate] Response:', {
+                success: data.success,
+                upsample_factor: data.upsample_factor,
+                effective_pixel_size: data.effective_pixel_size,
+                debug_info: data.debug_info
+            });
 
             if (data.success) {
                 // Update result with re-evaluated data

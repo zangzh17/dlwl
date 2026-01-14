@@ -89,6 +89,7 @@ class ReevaluateResponse(BaseModel):
     upsample_factor: Optional[int] = None
     effective_pixel_size: Optional[float] = None  # Pixel size in meters (original / upsample)
     error: Optional[str] = None
+    debug_info: Optional[Dict[str, Any]] = None  # Debug info for troubleshooting
 
 
 @router.post("/optimize", response_model=OptimizeResponse)
@@ -103,6 +104,9 @@ async def start_optimization(request: OptimizeRequest) -> OptimizeResponse:
     """
     # Create task
     task_id = task_manager.create_task()
+
+    # Debug: log what we received
+    print(f"[Optimize Route] Received: propagation_type={request.propagation_type}, target_span={request.target_span}, working_distance={request.working_distance}")
 
     # Build request data - all from DOE Settings
     request_data = {
@@ -249,6 +253,22 @@ async def reevaluate_result(task_id: str, request: ReevaluateRequest) -> Reevalu
     """
     task = task_manager.get_task(task_id)
 
+    # Debug: write request_data to file
+    if task and task.request_data:
+        import json
+        import os
+        debug_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'debug_request_data.json')
+        debug_path = os.path.abspath(debug_path)
+        try:
+            with open(debug_path, 'w') as f:
+                # Exclude large arrays
+                debug_data = {k: v for k, v in task.request_data.items()
+                              if k not in ('target_pattern',)}
+                json.dump(debug_data, f, indent=2, default=str)
+            print(f"Debug written to: {debug_path}")
+        except Exception as e:
+            print(f"Debug write error: {e}")
+
     if not task:
         return ReevaluateResponse(
             success=False,
@@ -302,7 +322,8 @@ async def reevaluate_result(task_id: str, request: ReevaluateRequest) -> Reevalu
             phase=reevaluated.get('phase'),
             metrics=reevaluated.get('metrics'),
             upsample_factor=reevaluated.get('upsample_factor'),
-            effective_pixel_size=reevaluated.get('effective_pixel_size')
+            effective_pixel_size=reevaluated.get('effective_pixel_size'),
+            debug_info=reevaluated.get('debug_info')
         )
 
     except Exception as e:

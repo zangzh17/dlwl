@@ -181,6 +181,17 @@ const AppState = {
                 // For physical size mode, use the target_span from wizard input
                 const ts = this.wizardInput.target_spec.target_span;
                 this.structuredParams.target_span = Array.isArray(ts) ? Math.max(...ts) : ts;
+            } else if (this.wizardInput.target_spec.target_type === 'angle' && wd) {
+                // For angle mode with working distance, compute physical target span
+                // target_span = 2 * z * tan(angle/2) where angle is in radians
+                let angleSpan = this.wizardInput.target_spec.target_span;
+                if (Array.isArray(angleSpan)) {
+                    angleSpan = Math.max(...angleSpan);
+                }
+                // Convert angle span to physical size at working distance
+                const physicalSpan = 2 * wd * Math.tan(angleSpan / 2);
+                this.structuredParams.target_span = physicalSpan;
+                console.log(`[AppState] Computed target_span from angle: ${(physicalSpan * 1000).toFixed(2)} mm`);
             }
         } else {
             this.structuredParams.target_span = null;

@@ -20,6 +20,38 @@ const OptimizerUI = {
     },
 
     /**
+     * Fetch and display device info
+     */
+    async fetchDeviceInfo() {
+        try {
+            const response = await fetch('/api/system-info');
+            const info = await response.json();
+
+            const deviceInfo = document.getElementById('device-info');
+            const deviceIcon = document.getElementById('device-icon');
+            const deviceText = document.getElementById('device-text');
+
+            if (info.cuda_available) {
+                deviceIcon.textContent = '🎮';  // GPU icon
+                let text = `GPU: ${info.device_name}`;
+                if (info.gpu_memory_gb) {
+                    text += ` (${info.gpu_memory_gb} GB)`;
+                }
+                deviceText.textContent = text;
+                deviceInfo.style.backgroundColor = '#e8f5e9';  // Light green
+            } else {
+                deviceIcon.textContent = '🖥️';  // CPU icon
+                deviceText.textContent = 'CPU Mode (CUDA not available)';
+                deviceInfo.style.backgroundColor = '#fff3e0';  // Light orange
+            }
+
+            deviceInfo.style.display = 'flex';
+        } catch (err) {
+            console.error('Error fetching device info:', err);
+        }
+    },
+
+    /**
      * Start optimization
      */
     async startOptimization() {
@@ -29,6 +61,9 @@ const OptimizerUI = {
 
         try {
             AppState.resetOptimization();
+
+            // Fetch device info first
+            this.fetchDeviceInfo();
 
             const request = AppState.getOptimizationRequest();
 

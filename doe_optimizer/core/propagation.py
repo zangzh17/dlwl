@@ -24,6 +24,7 @@ def propagation_ASM(
     feature_size: tuple,
     wavelength: np.ndarray,
     z: np.ndarray,
+    output_size: tuple = None,
     output_resolution: tuple = None,
     linear_conv: bool = True,
     padtype: str = "zero",
@@ -31,16 +32,78 @@ def propagation_ASM(
     precomputed_H: torch.Tensor = None,
     dtype: torch.dtype = torch.float32
 ) -> torch.Tensor:
-    if linear_conv:
-        input_resolution = u_in.size()[-2:]
-        conv_size = [i * 2 for i in input_resolution]
-        padval = 0 if padtype == "zero" else torch.median(torch.abs(u_in))
-        u_in = pad_image(u_in, conv_size, padval=padval)
+    """Angular Spectrum Method propagation with configurable output size.
 
+    Args:
+        u_in: Input field [B, C, H, W]
+        feature_size: (dy, dx) pixel size in meters
+        wavelength: Wavelength(s) in meters
+        z: Propagation distance(s) in meters
+        output_size: (height, width) physical output size in meters. If None, uses input size.
+        output_resolution: (height, width) output pixel count. If None, derived from output_size/feature_size.
+        linear_conv: Use linear convolution (True) or circular (False)
+        padtype: Padding type for linear_conv ("zero" or "median")
+        return_H: Return transfer function instead of propagating
+        precomputed_H: Pre-computed transfer function
+        dtype: Data type for computation
+
+    Returns:
+        Propagated field [B, C, H_out, W_out]
+
+    Notes:
+        - Case A (output_size > input_size): Zero-pad input to cover output area, then resample
+        - Case B (output_size <= input_size): Propagate directly, crop to output area, then resample
+        - ASM preserves pixel_size, so physical size is controlled via pixel count
+    """
+    dy, dx = feature_size
+    input_resolution = u_in.size()[-2:]
+    input_size = (input_resolution[0] * dy, input_resolution[1] * dx)
+
+    # Default output_size to input_size (original behavior)
+    if output_size is None:
+        output_size = input_size
+
+    # Calculate simulation size (must cover both input DOE and output target)
+    # Case A: output > input -> need to pad input
+    # Case B: output <= input -> no padding needed, will crop later
+    sim_size_h = max(output_size[0], input_size[0])
+    sim_size_w = max(output_size[1], input_size[1])
+
+    # Convert simulation size to pixels (using input pixel_size)
+    # Use ceiling to ensure we cover the required physical area
+    sim_pixels_h = int(np.ceil(sim_size_h / dy))
+    sim_pixels_w = int(np.ceil(sim_size_w / dx))
+
+    # Ensure even pixel count for FFT efficiency (avoid odd-size issues)
+    if sim_pixels_h % 2 == 1:
+        sim_pixels_h += 1
+    if sim_pixels_w % 2 == 1:
+        sim_pixels_w += 1
+
+    sim_resolution = (sim_pixels_h, sim_pixels_w)
+
+    # Default output_resolution: match output_size with same pixel_size
+    if output_resolution is None:
+        out_h = int(np.ceil(output_size[0] / dy))
+        out_w = int(np.ceil(output_size[1] / dx))
+        output_resolution = (out_h, out_w)
+
+    # Pad input to simulation size if needed (Case A: output > input)
+    u_sim = u_in
+    if sim_resolution[0] > input_resolution[0] or sim_resolution[1] > input_resolution[1]:
+        padval = 0 if padtype == "zero" else torch.median(torch.abs(u_in))
+        u_sim = pad_image(u_in, sim_resolution, padval=padval)
+
+    # For linear convolution, further pad to 2x for accurate convolution
+    if linear_conv:
+        conv_size = [i * 2 for i in sim_resolution]
+        padval = 0 if padtype == "zero" else torch.median(torch.abs(u_sim))
+        u_sim = pad_image(u_sim, conv_size, padval=padval)
+
+    # Compute transfer function if not provided
     if precomputed_H is None:
-        field_resolution = u_in.size()
+        field_resolution = u_sim.size()
         num_y, num_x = field_resolution[2], field_resolution[3]
-        dy, dx = feature_size
         y, x = dy * float(num_y), dx * float(num_x)
         zc_x = 2 * num_x * dx**2 / wavelength * np.sqrt(1 - (wavelength / (2 * dx))**2)
         zc_y = 2 * num_y * dy**2 / wavelength * np.sqrt(1 - (wavelength / (2 * dy))**2)
@@ -77,13 +140,33 @@ def propagation_ASM(
     if return_H:
         return H
 
-    u_out = H * torch.fft.fftn(torch.fft.ifftshift(u_in, dim=(-2, -1)), dim=(-2, -1), norm="ortho")
+    # Perform ASM propagation
+    u_out = H * torch.fft.fftn(torch.fft.ifftshift(u_sim, dim=(-2, -1)), dim=(-2, -1), norm="ortho")
     u_out = torch.fft.fftshift(torch.fft.ifftn(u_out, dim=(-2, -1), norm="ortho"), dim=(-2, -1))
 
+    # Crop back from linear convolution padding
     if linear_conv:
-        u_out = crop_image(u_out, input_resolution, pytorch=True)
+        u_out = crop_image(u_out, sim_resolution, pytorch=True)
 
-    if output_resolution is not None:
+    # Crop to output physical size (Case B: output <= sim_size)
+    # Calculate output pixels at simulation pixel_size
+    output_pixels_h = int(np.ceil(output_size[0] / dy))
+    output_pixels_w = int(np.ceil(output_size[1] / dx))
+
+    # Ensure even for consistency
+    if output_pixels_h % 2 == 1 and output_pixels_h < sim_resolution[0]:
+        output_pixels_h += 1
+    if output_pixels_w % 2 == 1 and output_pixels_w < sim_resolution[1]:
+        output_pixels_w += 1
+
+    output_pixels = (output_pixels_h, output_pixels_w)
+
+    if output_pixels[0] < sim_resolution[0] or output_pixels[1] < sim_resolution[1]:
+        u_out = crop_image(u_out, output_pixels, pytorch=True)
+
+    # Resample to target output_resolution
+    current_resolution = u_out.size()[-2:]
+    if current_resolution[0] != output_resolution[0] or current_resolution[1] != output_resolution[1]:
         u_out = fft_interp(u_out, output_resolution)
 
     return u_out

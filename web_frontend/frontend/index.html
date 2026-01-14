@@ -246,12 +246,12 @@
                             <h3>Target Pattern</h3>
                             <div class="preview-toggle">
                                 <label class="toggle-option">
-                                    <input type="radio" name="target_view" value="scatter" checked>
-                                    <span>Orders</span>
+                                    <input type="radio" name="target_view" value="physical" checked>
+                                    <span>物理空间</span>
                                 </label>
                                 <label class="toggle-option">
-                                    <input type="radio" name="target_view" value="heatmap">
-                                    <span>Intensity</span>
+                                    <input type="radio" name="target_view" value="pixel">
+                                    <span>像素空间</span>
                                 </label>
                             </div>
                             <div id="target-preview" class="preview-box target-pattern">
@@ -267,6 +267,12 @@
             <!-- Optimization Panel -->
             <section id="optimize-panel" class="panel">
                 <h2>Optimization Progress</h2>
+
+                <!-- Device Info -->
+                <div id="device-info" class="device-info-bar" style="display: none;">
+                    <span id="device-icon">🖥️</span>
+                    <span id="device-text">Loading...</span>
+                </div>
 
                 <div class="progress-section">
                     <div class="progress-bar-container">
@@ -371,6 +377,16 @@
                                 <label class="toggle-option">
                                     <input type="radio" name="intensity_view" value="comparison">
                                     <span>Side by Side</span>
+                                </label>
+                            </div>
+                            <div class="coord-toggle">
+                                <label class="toggle-option">
+                                    <input type="radio" name="intensity_coord" value="pixel" checked>
+                                    <span>像素</span>
+                                </label>
+                                <label class="toggle-option">
+                                    <input type="radio" name="intensity_coord" value="physical">
+                                    <span>物理</span>
                                 </label>
                             </div>
                             <label class="checkbox-inline">

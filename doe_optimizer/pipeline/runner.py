@@ -290,21 +290,29 @@ class OptimizationRunner:
                 doe_total_pixels=tuple(doe_pixels)
             )
         elif prop_type == PropagationType.ASM:
-            # Calculate target pixels for ASM
-            target_px = list(simulation_pixels)
+            # ASM with configurable output_size (similar interface to SFR)
+            # target_resolution must match target_pattern shape for loss calculation
+            # target_size is the physical output area (from target_span + margin)
+            target_margin = advanced.get('target_margin', 0.1)
+            margin_factor = 1.0 + target_margin  # Default: 1.1
+
+            # Use target_pattern shape as target_resolution (must match exactly!)
+            target_res = tuple(target_tensor.shape[-2:])
+
             if target_span and working_distance:
-                # Calculate output pixels to cover target span
-                output_size_px = int(target_span / pixel_size)
-                target_px = [output_size_px, output_size_px]
-            # Ensure target >= DOE for linear convolution
-            target_px[0] = max(target_px[0], doe_pixels[0])
-            target_px[1] = max(target_px[1], doe_pixels[1])
+                # Apply margin factor to target_size (must match wizard!)
+                target_size_m = (target_span * margin_factor, target_span * margin_factor)
+            else:
+                # Fallback: use DOE size as target
+                doe_size_m = doe_pixels[0] * pixel_size
+                target_size_m = (doe_size_m, doe_size_m)
 
             params = ASMParams(
                 physical=physical,
                 doe_pixels=tuple(doe_pixels),
                 working_distances=[working_distance] if working_distance else [0.01],
-                target_pixels=tuple(target_px),
+                target_size=target_size_m,
+                target_resolution=target_res,
                 upsample_factor=1
             )
         elif prop_type == PropagationType.SFR:
@@ -523,6 +531,7 @@ class OptimizationRunner:
 
         # Debug: print shapes and config
         prop_config = wizard_output.propagator_config
+        print(f"[Optimizer] Using device: {self.device}")
         print(f"[Optimizer] prop_type: {prop_config.prop_type}")
         print(f"[Optimizer] target shape: {target.shape}")
         print(f"[Optimizer] feature_size: {prop_config.feature_size}")

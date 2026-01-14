@@ -93,7 +93,7 @@ def reevaluate_at_resolution(
     elif propagation_type == 'asm':
         return _reevaluate_asm(
             phase, target, upsample_factor, pixel_size, wavelength,
-            working_distance, target_indices, device, effective_pixel_size
+            working_distance, target_size, target_indices, device, effective_pixel_size
         )
     elif propagation_type == 'sfr':
         return _reevaluate_sfr(
@@ -207,73 +207,72 @@ def _reevaluate_asm(
     pixel_size: float,
     wavelength: float,
     working_distance: float,
+    target_size: Optional[Tuple[float, float]],
     target_indices: Optional[List[Tuple[int, int]]],
     device: torch.device,
     effective_pixel_size: float
 ) -> ReevaluationResult:
-    """Re-evaluate ASM result using kron-upsampled phase.
+    """Re-evaluate ASM result with upsampled phase (finer DOE pixels).
 
-    Kron upsampling simulates a DOE with finer fabrication pixels:
-    - Same DOE physical size, more pixels (smaller effective_pixel_size)
-    - ASM output has same pixel count as input (upsampled)
-    - Downsample output to original resolution (bin averaging)
-    - Same physical output area, same resolution as original
+    Analysis Upsample for ASM (same as SFR):
+    - Upsample the INPUT PHASE (each pixel -> k×k block with same value)
+    - Use smaller effective_pixel_size = pixel_size / upsample_factor
+    - OUTPUT resolution and physical range stay UNCHANGED
+    - This simulates a DOE with finer fabrication pixels covering same area
     """
     from scipy import ndimage
     from ..core.propagation import propagation_ASM
 
-    original_shape = phase.shape
+    original_shape = target.shape  # Use target shape as output resolution
     h_orig, w_orig = original_shape
 
-    # Kron upsample phase (each pixel → k×k block, same value)
+    # Upsample phase: each pixel -> k×k block with same value (nearest neighbor)
+    # This simulates finer DOE pixels covering the same physical area
     phase_upsampled = ndimage.zoom(phase, upsample_factor, order=0)
 
-    # Prepare for propagation
-    h_up, w_up = phase_upsampled.shape
+    # Effective pixel size decreases (finer pixels)
+    # DOE physical size stays the same
+    eff_pixel_size = pixel_size / upsample_factor
+
+    # Prepare upsampled phase tensor
     phase_tensor = torch.tensor(phase_upsampled, dtype=torch.float32, device=device)
     phase_tensor = phase_tensor.unsqueeze(0).unsqueeze(0)
 
-    # ASM propagation with smaller feature size
+    # ASM propagation with:
+    # - Upsampled phase (more pixels)
+    # - Smaller feature_size (effective_pixel_size)
+    # - Same target_size (same physical output area)
+    # - ORIGINAL output_resolution (same number of output samples)
     with torch.no_grad():
         field = torch.exp(1j * phase_tensor.to(torch.complex64))
         output = propagation_ASM(
             u_in=field,
-            feature_size=(effective_pixel_size, effective_pixel_size),
+            feature_size=(eff_pixel_size, eff_pixel_size),  # Smaller pixel size
             wavelength=np.array([[[[wavelength]]]]),
             z=np.array([[[[working_distance]]]]),
+            output_size=target_size,  # Same physical area
+            output_resolution=(h_orig, w_orig),  # ORIGINAL output resolution
             linear_conv=True
         )
-        simulated_full = output.abs() ** 2
+        simulated = output.abs() ** 2
 
-    simulated_full_np = simulated_full.squeeze().cpu().numpy()
-
-    # Downsample to original resolution (bin averaging)
-    # Each k×k block in upsampled output → 1 pixel in original
-    # This preserves the same physical output area
-    k = upsample_factor
-    h_full, w_full = simulated_full_np.shape
-    # Trim to exact multiple of k if needed
-    h_trim = (h_full // k) * k
-    w_trim = (w_full // k) * k
-    simulated_trimmed = simulated_full_np[:h_trim, :w_trim]
-    # Reshape and average (bin)
-    simulated_np = simulated_trimmed.reshape(h_trim // k, k, w_trim // k, k).mean(axis=(1, 3))
-
+    simulated_np = simulated.squeeze().cpu().numpy()
     simulated_np = simulated_np / (simulated_np.sum() + 1e-10)
 
-    # Target stays at ORIGINAL size (normalized)
+    # Target stays at ORIGINAL size (output resolution unchanged)
     target_normalized = target / (target.sum() + 1e-10)
 
-    # Use ORIGINAL indices (output is same size as original)
-    metrics = _compute_asm_metrics(simulated_np, target_normalized, target_indices or [])
+    # Target indices stay the same (output grid unchanged)
+    # Use upsample_factor=1 for metrics since output resolution is original
+    metrics = _compute_asm_metrics(simulated_np, target_normalized, target_indices or [], upsample_factor=1)
 
     return ReevaluationResult(
         simulated_intensity=simulated_np,
         target_intensity=target_normalized,
-        phase=phase_upsampled,
+        phase=phase_upsampled,  # Return upsampled phase
         metrics=metrics,
         upsample_factor=upsample_factor,
-        effective_pixel_size=effective_pixel_size
+        effective_pixel_size=eff_pixel_size
     )
 
 
@@ -289,13 +288,16 @@ def _reevaluate_sfr(
     device: torch.device,
     effective_pixel_size: float
 ) -> ReevaluationResult:
-    """Re-evaluate SFR result using kron-upsampled phase.
+    """Re-evaluate SFR result with upsampled phase (finer DOE pixels).
 
-    Kron upsampling simulates a DOE with finer fabrication pixels:
-    - Same DOE physical size, more pixels (smaller effective_pixel_size)
-    - Same output physical size (target_size unchanged)
-    - Same output resolution (original target shape) - independent of upsample
-    - Simulates what happens with finer fabrication resolution
+    Analysis Upsample for SFR:
+    - Upsample the INPUT PHASE (each pixel -> k×k block with same value)
+    - Use smaller effective_pixel_size = pixel_size / upsample_factor
+    - OUTPUT resolution and physical range stay UNCHANGED
+    - This simulates a DOE with finer fabrication pixels covering same area
+
+    The purpose is to verify the effect of input sampling resolution
+    on the diffraction pattern.
     """
     from scipy import ndimage
     from ..core.propagation import propagation_SFR
@@ -303,46 +305,52 @@ def _reevaluate_sfr(
     original_shape = target.shape
     h_orig, w_orig = original_shape
 
-    # Kron upsample phase (each pixel → k×k block, same value)
+    # Upsample phase: each pixel -> k×k block with same value (nearest neighbor)
+    # This simulates finer DOE pixels covering the same physical area
     phase_upsampled = ndimage.zoom(phase, upsample_factor, order=0)
 
-    # Output resolution stays at ORIGINAL size (independent of upsample)
-    output_resolution = (h_orig, w_orig)
+    # Effective pixel size decreases (finer pixels)
+    # DOE physical size stays the same: (h_orig * pixel_size) = (h_up * effective_pixel_size)
+    eff_pixel_size = pixel_size / upsample_factor
 
-    # Prepare for propagation
-    h_up, w_up = phase_upsampled.shape
+    # Prepare upsampled phase tensor
     phase_tensor = torch.tensor(phase_upsampled, dtype=torch.float32, device=device)
     phase_tensor = phase_tensor.unsqueeze(0).unsqueeze(0)
 
-    # SFR propagation with smaller feature size, same output area and resolution
+    # SFR propagation with:
+    # - Upsampled phase (more pixels)
+    # - Smaller feature_size (effective_pixel_size)
+    # - Same target_size (same physical output area)
+    # - ORIGINAL output_resolution (same number of output samples)
     with torch.no_grad():
         field = torch.exp(1j * phase_tensor.to(torch.complex64))
         output = propagation_SFR(
             u_in=field,
-            feature_size=(effective_pixel_size, effective_pixel_size),
+            feature_size=(eff_pixel_size, eff_pixel_size),  # Smaller pixel size
             wavelength=np.array([[[[wavelength]]]]),
             z=np.array([[[[working_distance]]]]),
-            output_size=target_size,
-            output_resolution=output_resolution
+            output_size=target_size,  # Same physical area
+            output_resolution=(h_orig, w_orig)  # ORIGINAL output resolution
         )
         simulated = output.abs() ** 2
 
     simulated_np = simulated.squeeze().cpu().numpy()
     simulated_np = simulated_np / (simulated_np.sum() + 1e-10)
 
-    # Target stays at ORIGINAL size (normalized)
+    # Target stays at ORIGINAL size (output resolution unchanged)
     target_normalized = target / (target.sum() + 1e-10)
 
-    # Use ORIGINAL indices (output is same size as original)
-    metrics = _compute_asm_metrics(simulated_np, target_normalized, target_indices or [])
+    # Target indices stay the same (output grid unchanged)
+    # Use upsample_factor=1 for metrics since output resolution is original
+    metrics = _compute_asm_metrics(simulated_np, target_normalized, target_indices or [], upsample_factor=1)
 
     return ReevaluationResult(
         simulated_intensity=simulated_np,
         target_intensity=target_normalized,
-        phase=phase_upsampled,
+        phase=phase_upsampled,  # Return upsampled phase
         metrics=metrics,
         upsample_factor=upsample_factor,
-        effective_pixel_size=effective_pixel_size
+        effective_pixel_size=eff_pixel_size
     )
 
 
@@ -445,16 +453,30 @@ def _compute_fft_metrics(
 def _compute_asm_metrics(
     simulated: np.ndarray,
     target: np.ndarray,
-    target_indices: List[Tuple[int, int]]
+    target_indices: List[Tuple[int, int]],
+    upsample_factor: int = 1
 ) -> Dict[str, Any]:
-    """Compute metrics for ASM/SFR output using Airy disk integration."""
+    """Compute metrics for ASM/SFR output using Airy disk integration.
+
+    Args:
+        simulated: Simulated intensity [H, W]
+        target: Target intensity [H, W]
+        target_indices: Target positions [(y, x), ...] in upsampled coordinates
+        upsample_factor: Resolution multiplier (used to scale integration radius)
+
+    Returns:
+        Dictionary with efficiency metrics
+    """
     # Simple MSE-based metric for now
     mse = float(np.mean((simulated - target) ** 2))
 
     # Efficiency at target positions (with small radius integration)
+    # The integration radius should scale with upsample_factor to cover
+    # the same physical area regardless of resolution
     total_energy = simulated.sum()
     efficiencies = []
-    integration_radius = 3  # pixels
+    base_integration_radius = 3  # pixels at 1x
+    integration_radius = base_integration_radius * upsample_factor
 
     for py, px in target_indices:
         h, w = simulated.shape
